@@ -1,5 +1,7 @@
 # hms-esp-apc
 
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-%23FFDD00.svg?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/aamat09)
+
 ESP32-S3 USB Host to MQTT bridge for APC UPS with Home Assistant auto-discovery.
 
 Reads real-time metrics from an APC Back-UPS over USB HID and publishes them to an MQTT broker. Home Assistant discovers the UPS automatically — no YAML configuration required.
@@ -168,6 +170,13 @@ Contributions are welcome! Please open an issue or pull request.
 2. Create a feature branch (`git checkout -b feature/my-change`)
 3. Commit your changes
 4. Push to the branch and open a Pull Request
+---
+
+## ☕ Support
+
+If this project is useful to you, consider buying me a coffee!
+
+[![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/aamat09)
 
 ## License
 
