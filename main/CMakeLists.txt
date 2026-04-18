@@ -5,6 +5,7 @@ idf_component_register(
         "mqtt_manager.c"
         "apc_hid_parser.c"
         "usb_host_manager.c"
+        "http_server.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -16,4 +17,5 @@ idf_component_register(
         esp_wifi
         esp_netif
         esp_event
+        esp_http_server
 )

@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-esp_err_t mqtt_init(void);
+esp_err_t mqtt_init(const char *broker_url, const char *username, const char *password);
 esp_err_t mqtt_publish_metric(const char *sensor_name, float value, const char *unit);
 esp_err_t mqtt_publish_string(const char *sensor_name, const char *value);
 esp_err_t mqtt_publish_discovery(const char *sensor_name, const char *friendly_name, const char *unit, const char *device_class);

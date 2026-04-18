@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "lwip/ip_addr.h"
+#include <string.h>
 
 static const char *TAG = "wifi_manager";
 
@@ -30,18 +31,21 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-esp_err_t wifi_init_sta(void)
+static char stored_ssid[64] = {0};
+
+esp_err_t wifi_init_sta(const char *ssid, const char *password)
 {
+    strlcpy(stored_ssid, ssid, sizeof(stored_ssid));
+
     s_wifi_event_group = xEventGroupCreate();
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     // Create WiFi station netif with DHCP (automatic IP assignment)
-    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+    esp_netif_create_default_wifi_sta();
 
     ESP_LOGI(TAG, "⚙️  Using DHCP for automatic IP assignment");
-    ESP_LOGI(TAG, "💡 Each device will get unique IP from router based on MAC address");
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -61,15 +65,17 @@ esp_err_t wifi_init_sta(void)
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = CONFIG_WIFI_SSID,
-            .password = CONFIG_WIFI_PASSWORD,
+            .threshold.authmode = WIFI_AUTH_OPEN,
         },
     };
+    strlcpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid));
+    strlcpy((char *)wifi_config.sta.password, password, sizeof(wifi_config.sta.password));
+
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "WiFi initialization complete. Connecting to SSID:%s", CONFIG_WIFI_SSID);
+    ESP_LOGI(TAG, "WiFi initialization complete. Connecting to SSID:%s", ssid);
 
     return ESP_OK;
 }
@@ -83,7 +89,7 @@ esp_err_t wifi_wait_connected(uint32_t timeout_ms)
             pdMS_TO_TICKS(timeout_ms));
 
     if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "✅ Connected to WiFi SSID:%s", CONFIG_WIFI_SSID);
+        ESP_LOGI(TAG, "✅ Connected to WiFi SSID:%s", stored_ssid);
         return ESP_OK;
     } else {
         ESP_LOGE(TAG, "❌ WiFi connection timeout");

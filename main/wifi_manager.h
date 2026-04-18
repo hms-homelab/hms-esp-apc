@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-esp_err_t wifi_init_sta(void);
+esp_err_t wifi_init_sta(const char *ssid, const char *password);
 esp_err_t wifi_wait_connected(uint32_t timeout_ms);
 bool wifi_is_connected(void);
 

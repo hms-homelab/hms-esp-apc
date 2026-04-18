@@ -16,8 +16,10 @@
 #include "mqtt_manager.h"
 #include "apc_hid_parser.h"
 #include "usb_host_manager.h"
+#include "http_server.h"
 
 static const char *TAG = "main";
+static app_config_t app_config;
 
 // Task to publish UPS metrics periodically
 static void mqtt_publish_task(void *arg)
@@ -88,7 +90,7 @@ static void mqtt_publish_task(void *arg)
             if (metrics->valid) {
                 ESP_LOGI(TAG, "═══════════════════════════════════════════");
                 ESP_LOGI(TAG, "📤 PUBLISHING TO MQTT");
-                ESP_LOGI(TAG, "   Broker: %s", CONFIG_MQTT_BROKER_URL);
+                ESP_LOGI(TAG, "   Broker: %s", app_config.mqtt_url);
                 ESP_LOGI(TAG, "   Base Topic: homeassistant/sensor/apc_ups");
                 ESP_LOGI(TAG, "");
 
@@ -217,7 +219,7 @@ static void mqtt_publish_task(void *arg)
             ESP_LOGW(TAG, "⚠️ MQTT not connected, skipping publish");
         }
         
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_MQTT_PUBLISH_INTERVAL_MS));
+        vTaskDelay(pdMS_TO_TICKS(app_config.publish_interval_ms));
     }
 }
 
@@ -259,7 +261,7 @@ static void simulate_ups_data_task(void *arg)
 
 // Build timestamp - updated on every compile
 #define BUILD_TIMESTAMP __DATE__ " " __TIME__
-#define FIRMWARE_VERSION "1.10.0"
+#define FIRMWARE_VERSION "1.11.0"
 
 void app_main(void)
 {
@@ -285,12 +287,18 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    // Load config from NVS (with Kconfig defaults as fallback)
+    config_load(&app_config);
+    ESP_LOGI(TAG, "📋 Config: WiFi=%s, MQTT=%s, Interval=%lums",
+             app_config.wifi_ssid, app_config.mqtt_url,
+             (unsigned long)app_config.publish_interval_ms);
+
     // Initialize HID parser
     apc_hid_parser_init();
 
     // Initialize WiFi
     ESP_LOGI(TAG, "📶 Initializing WiFi...");
-    ESP_ERROR_CHECK(wifi_init_sta());
+    ESP_ERROR_CHECK(wifi_init_sta(app_config.wifi_ssid, app_config.wifi_pass));
 
     // Wait for WiFi connection
     if (wifi_wait_connected(30000) != ESP_OK) {
@@ -298,9 +306,13 @@ void app_main(void)
         esp_restart();
     }
 
+    // Start HTTP server (config UI + status/logs)
+    ESP_LOGI(TAG, "🌐 Starting HTTP server...");
+    http_server_start(&app_config);
+
     // Initialize MQTT
     ESP_LOGI(TAG, "📡 Initializing MQTT...");
-    ESP_ERROR_CHECK(mqtt_init());
+    ESP_ERROR_CHECK(mqtt_init(app_config.mqtt_url, app_config.mqtt_user, app_config.mqtt_pass));
     ESP_LOGI(TAG, "DEBUG: MQTT init complete");
 
     // Initialize USB Host
@@ -322,8 +334,9 @@ void app_main(void)
     xTaskCreate(mqtt_publish_task, "mqtt_publish", 4096, NULL, 4, NULL);
 
     ESP_LOGI(TAG, "=== ✅ APC USB-MQTT Bridge Running ===");
-    ESP_LOGI(TAG, "WiFi: Connected to %s", CONFIG_WIFI_SSID);
-    ESP_LOGI(TAG, "MQTT Broker: %s", CONFIG_MQTT_BROKER_URL);
+    ESP_LOGI(TAG, "WiFi: Connected to %s", app_config.wifi_ssid);
+    ESP_LOGI(TAG, "MQTT Broker: %s", app_config.mqtt_url);
+    ESP_LOGI(TAG, "🌐 Web UI: http://<device-ip>/  Status: http://<device-ip>/status");
 #ifdef DISABLE_USB_HOST
     ESP_LOGW(TAG, "🐛 DEBUG MODE: USB Host disabled, using simulated data only");
 #endif

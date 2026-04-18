@@ -2,23 +2,23 @@ menu "APC UPS Configuration"
 
     config WIFI_SSID
         string "WiFi SSID"
-        default "myssid"
+        default "scorpio"
 
     config WIFI_PASSWORD
         string "WiFi Password"
-        default "mypassword"
+        default "sabrina1111"
 
     config MQTT_BROKER_URL
         string "MQTT Broker URL"
-        default "mqtt://192.168.1.100"
+        default "mqtt://192.168.2.15"
 
     config MQTT_USERNAME
         string "MQTT Username"
-        default ""
+        default "aamat"
 
     config MQTT_PASSWORD
         string "MQTT Password"
-        default ""
+        default "exploracion"
 
     config UPS_POLL_INTERVAL_MS
         int "UPS Poll Interval (ms)"
@@ -28,6 +28,6 @@ menu "APC UPS Configuration"
     config MQTT_PUBLISH_INTERVAL_MS
         int "MQTT Publish Interval (ms)"
         range 5000 300000
-        default 10000
+        default 60000
 
 endmenu

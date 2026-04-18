@@ -56,15 +56,15 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
-esp_err_t mqtt_init(void)
+esp_err_t mqtt_init(const char *broker_url, const char *username, const char *password)
 {
     // Generate unique device ID from MAC address
     generate_device_id();
 
     esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = CONFIG_MQTT_BROKER_URL,
-        .credentials.username = CONFIG_MQTT_USERNAME,
-        .credentials.authentication.password = CONFIG_MQTT_PASSWORD,
+        .broker.address.uri = broker_url,
+        .credentials.username = username,
+        .credentials.authentication.password = password,
     };
 
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
@@ -81,7 +81,7 @@ esp_err_t mqtt_init(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "MQTT client started with username: %s", CONFIG_MQTT_USERNAME);
+    ESP_LOGI(TAG, "MQTT client started, broker: %s, user: %s", broker_url, username);
     return ESP_OK;
 }
 
