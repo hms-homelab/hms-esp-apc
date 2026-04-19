@@ -19,7 +19,7 @@ Reads real-time metrics from an APC Back-UPS over USB HID and publishes them to 
 ## Supported Hardware
 
 - **Microcontroller**: ESP32-S3 with USB OTG (e.g., M5Stack AtomS3, ESP32-S3-DevKitC)
-- **UPS**: APC Back-UPS series (USB VID `051D`, PID `0002`) — tested with Back-UPS XS 1000M
+- **UPS**: APC UPS (USB VID `051D`, PID `0002` Back-UPS or `0003` Smart-UPS) — tested with Back-UPS XS 1000M, Smart-UPS C 1500
 - **USB Connection**: USB OTG on GPIO19 (D-) / GPIO20 (D+)
 
 ### Wiring

@@ -76,9 +76,12 @@ static const char *TAG = "usb_host";
 //══════════════════════════════════════════════════════════════════════════════
 // APC UPS USB Vendor/Product IDs (identifies this specific UPS model)
 // VID 0x051D = American Power Conversion
-// PID 0x0002 = Back-UPS series (covers many models including XS 1000M)
+// PID 0x0002 = Back-UPS series (Back-UPS XS 1000M, etc.)
+// PID 0x0003 = Smart-UPS series (Smart-UPS C 1500, etc.)
 #define APC_VID 0x051d
-#define APC_PID 0x0002
+#define APC_PID_BACKUPS  0x0002
+#define APC_PID_SMARTUPS 0x0003
+#define IS_APC_UPS(vid, pid) ((vid) == APC_VID && ((pid) == APC_PID_BACKUPS || (pid) == APC_PID_SMARTUPS))
 
 //══════════════════════════════════════════════════════════════════════════════
 // USB HOST STATE TRACKING
@@ -128,7 +131,7 @@ static void usb_host_client_event_cb(const usb_host_client_event_msg_t *event_ms
             ESP_LOGI(TAG, "DEBUG: Device VID:PID = %04X:%04X", dev_desc->idVendor, dev_desc->idProduct);
 
             // Check if this is our APC UPS
-            if (dev_desc->idVendor == APC_VID && dev_desc->idProduct == APC_PID) {
+            if (IS_APC_UPS(dev_desc->idVendor, dev_desc->idProduct)) {
                 ESP_LOGI(TAG, "🔌 APC UPS found! VID:PID = %04X:%04X",
                          dev_desc->idVendor, dev_desc->idProduct);
 
@@ -170,8 +173,8 @@ static void usb_host_client_event_cb(const usb_host_client_event_msg_t *event_ms
                     }
                 }
             } else {
-                ESP_LOGI(TAG, "⚠️ Not an APC UPS (VID:PID = %04X:%04X), expected %04X:%04X",
-                         dev_desc->idVendor, dev_desc->idProduct, APC_VID, APC_PID);
+                ESP_LOGI(TAG, "⚠️ Not an APC UPS (VID:PID = %04X:%04X), expected VID=%04X",
+                         dev_desc->idVendor, dev_desc->idProduct, APC_VID);
                 usb_host_device_close(usb_client, dev_hdl);
             }
             break;
@@ -579,7 +582,7 @@ esp_err_t usb_host_init(void)
     }
 
     ESP_LOGI(TAG, "✅ USB Host initialized successfully");
-    ESP_LOGI(TAG, "🔍 Waiting for APC UPS (VID:PID = %04X:%04X)", APC_VID, APC_PID);
+    ESP_LOGI(TAG, "🔍 Waiting for APC UPS (VID=%04X, PID=%04X or %04X)", APC_VID, APC_PID_BACKUPS, APC_PID_SMARTUPS);
 
     return ESP_OK;
 }
