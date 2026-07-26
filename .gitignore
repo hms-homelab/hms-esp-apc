@@ -1,0 +1,10 @@
+build/
+sdkconfig
+sdkconfig.old
+*.o
+*.elf
+*.bin
+*.map
+
+# clangd index
+.cache/

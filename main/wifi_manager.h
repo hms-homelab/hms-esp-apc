@@ -1,0 +1,35 @@
+#ifndef WIFI_MANAGER_H
+#define WIFI_MANAGER_H
+
+#include <stdbool.h>
+#include "esp_err.h"
+
+/* Max STA association attempts before we give up and fall back to the portal. */
+#define WIFI_MAX_RETRY 10
+
+/* Default esp_netif SoftAP address; the portal and DNS hijack both use it. */
+#define PORTAL_IP_STR "192.168.4.1"
+
+/* Bring up netifs, the event loop and the WiFi driver. Call once, before either
+ * wifi_connect_sta() or wifi_start_portal(). */
+esp_err_t wifi_manager_init(void);
+
+/* Join an existing network. Retries WIFI_MAX_RETRY times, then reports failure
+ * through wifi_wait_connected(). */
+esp_err_t wifi_connect_sta(const char *ssid, const char *password);
+
+/* Blocks until associated + DHCP, or until the retry budget is spent. */
+esp_err_t wifi_wait_connected(uint32_t timeout_ms);
+
+/* Open SoftAP ("APC-XXXX") + catch-all DNS so the config page is reachable at
+ * http://192.168.4.1/ . Used when there is no saved config, or when joining fails. */
+esp_err_t wifi_start_portal(void);
+
+bool        wifi_is_connected(void);
+bool        wifi_portal_active(void);
+const char *wifi_portal_ssid(void);
+
+/* Kept for source compatibility: init + connect in one call. */
+esp_err_t wifi_init_sta(const char *ssid, const char *password);
+
+#endif // WIFI_MANAGER_H

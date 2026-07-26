@@ -1,0 +1,38 @@
+menu "APC UPS Configuration"
+
+    # Credentials are intentionally blank. A board with no WiFi SSID boots into
+    # the SoftAP config portal (APC-XXXX / 192.168.4.1) and is provisioned there;
+    # what you save is stored in NVS and survives reflashing. Set these only if
+    # you are building a pre-provisioned image, and do not commit real values.
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default ""
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+
+    config MQTT_BROKER_URL
+        string "MQTT Broker URL"
+        default ""
+
+    config MQTT_USERNAME
+        string "MQTT Username"
+        default ""
+
+    config MQTT_PASSWORD
+        string "MQTT Password"
+        default ""
+
+    config UPS_POLL_INTERVAL_MS
+        int "UPS Poll Interval (ms)"
+        range 1000 60000
+        default 5000
+
+    config MQTT_PUBLISH_INTERVAL_MS
+        int "MQTT Publish Interval (ms)"
+        range 5000 300000
+        default 60000
+
+endmenu
