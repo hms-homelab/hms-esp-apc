@@ -8,3 +8,6 @@ sdkconfig.old
 
 # clangd index
 .cache/
+
+# local bench credentials — never commit
+sdkconfig.local.defaults
