@@ -228,8 +228,6 @@ Contributions are welcome. Please open an issue or a pull request.
 3. Commit your changes
 4. Push the branch and open a Pull Request
 
-Please do not commit real credentials. The Kconfig defaults are deliberately blank; use `sdkconfig.local.defaults` for local values.
-
 ---
 
 ## Support
