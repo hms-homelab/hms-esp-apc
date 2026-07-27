@@ -8,10 +8,17 @@
 
 Plug the board into the UPS, join its setup WiFi, type your credentials once, and the UPS appears in Home Assistant. Nothing else runs anywhere.
 
-| Home Assistant | Config and OTA | Live status |
-|:---:|:---:|:---:|
-| [<img src="docs/images/home-assistant.png" width="260">](docs/images/home-assistant.png) | [<img src="docs/images/web-ui.png" width="260">](docs/images/web-ui.png) | [<img src="docs/images/status-page.png" width="260">](docs/images/status-page.png) |
-| One device, 30+ entities, discovered automatically | Everything configurable in a browser, firmware included | Live metrics and the HID decode as it happens |
+The UPS arrives in Home Assistant as a single device with every metric as its own entity, discovered automatically, no YAML to write.
+
+![The UPS in Home Assistant, one device with every metric as an entity](docs/images/home-assistant.png)
+
+Everything is configurable from the board itself in a browser: WiFi, MQTT, publish interval, device naming, and firmware updates.
+
+![The board's web configuration UI, including the firmware update card](docs/images/web-ui.png)
+
+The status page shows live metrics next to the HID decode as it happens, which is what you want when bringing up a UPS model for the first time.
+
+![The live status page, showing metrics and the HID decode log](docs/images/status-page.png)
 
 ## Why this is different
 
@@ -78,10 +85,11 @@ Settings are stored in NVS, so they survive reflashing. The portal returns autom
 
 ### What it looks like built
 
-<!-- Drop the photos into docs/images/, write your own captions, and uncomment.
-| | |
-|:---:|:---:|
-| [<img src="docs/images/board-wiring.jpg" width="380">](docs/images/board-wiring.jpg) | [<img src="docs/images/installed.jpg" width="380">](docs/images/installed.jpg) |
+<!-- Drop the photos into docs/images/, write a line above each, and uncomment.
+
+![](docs/images/board-wiring.jpg)
+
+![](docs/images/installed.jpg)
 -->
 
 The connection people get wrong is power. The link to the UPS and the board's own 5V supply are separate things, and the UPS port supplies nothing, so the board is powered externally with that same 5V routed to the UPS `VCC` pin as described above.
