@@ -46,10 +46,6 @@ What that dashboard gives you over per-device entities:
 - **Charts over any stored metric and any range**, plus cross-node comparison that overlays one metric across every monitored unit, so you can see input voltage across the whole house over seven days on a single chart.
 - **An AI written daily summary of the entire home.** Once a day the service feeds the previous day's aggregates for every device to an LLM and writes a plain language summary of your energy and power events. Summaries are kept, so the card shows the latest with earlier days behind a toggle. The backend is pluggable: Ollama for fully local, or OpenAI, Gemini, or Anthropic.
 
-[<img src="https://raw.githubusercontent.com/hms-homelab/hms-nut/main/images/dashboard.png" width="700">](https://github.com/hms-homelab/hms-nut)
-
-*The hms-nut dashboard: fleet roll-up, the LLM written daily summary, and per-node cards with 24 hour sparklines. The two ESP32 nodes are boards running this firmware.*
-
 It matters here because it reads this firmware's MQTT directly. Set `NUT_ENABLED=false` and it treats ESP32 monitors as first class sources, so you get fleet history, charts, and the daily summary with no NUT daemon anywhere, and no Home Assistant either if you do not want one. It can also poll a real `upsd` alongside, which is useful when some units are on NUT already and some are running this firmware.
 
 The two are independent. Use this firmware alone for a Home Assistant setup, add hms-nut when you outgrow one UPS or want a single dashboard for the whole house.
