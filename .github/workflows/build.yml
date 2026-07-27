@@ -1,0 +1,76 @@
+# Reusable firmware build. Called by ci.yml on every push/PR and by release.yml
+# when a tag is pushed, so a release ships exactly what CI already builds.
+name: build firmware
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: Name for the uploaded artifact holding the staged binaries
+        required: false
+        default: firmware
+        type: string
+    outputs:
+      version:
+        description: Version parsed out of main/version.h
+        value: ${{ jobs.build.outputs.version }}
+
+jobs:
+  build:
+    name: esp32s3
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # main/version.h is the single source of truth. CMakeLists.txt parses the
+      # same line for PROJECT_VER; the assertion below proves the two agree.
+      - name: Read version
+        id: version
+        run: |
+          version=$(sed -n 's/^#define[[:space:]][[:space:]]*HMS_ESP_APC_VERSION[[:space:]][[:space:]]*"\([^"]*\)".*/\1/p' main/version.h)
+          if [ -z "$version" ]; then
+            echo "::error file=main/version.h::could not parse HMS_ESP_APC_VERSION"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building v$version"
+
+      # esp_idf_version tracks the idf entry in dependencies.lock. The component
+      # manager fetches espressif/led_strip during the build; managed_components/
+      # is gitignored on purpose.
+      - name: Build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.4
+          target: esp32s3
+          path: '.'
+          command: idf.py build && idf.py merge-bin -o build/merged.bin
+
+      - name: Assert the build picked up version.h
+        run: |
+          built=$(python3 -c "import json;print(json.load(open('build/project_description.json'))['project_version'])")
+          want='${{ steps.version.outputs.version }}'
+          if [ "$built" != "$want" ]; then
+            echo "::error::app descriptor says '$built' but main/version.h says '$want'"
+            exit 1
+          fi
+          echo "app descriptor version: $built"
+
+      # Two shapes: the app image for an OTA update from the web UI, and a full
+      # flash image for a blank board or any board still on a pre-OTA build
+      # (v1.11.0 and earlier have no ota_0/ota_1, so their first hop must be USB).
+      - name: Stage artifacts
+        run: |
+          v='${{ steps.version.outputs.version }}'
+          mkdir -p dist
+          cp build/apc_usb_mqtt_bridge.bin "dist/hms-esp-apc-$v.bin"
+          cp build/merged.bin              "dist/hms-esp-apc-$v-merged.bin"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: dist/
+          if-no-files-found: error

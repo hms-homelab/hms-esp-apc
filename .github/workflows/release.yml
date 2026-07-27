@@ -1,0 +1,89 @@
+# Triggered by a tag you push by hand, e.g.
+#   git tag v1.15.0 && git push origin v1.15.0
+# Nothing here tags on its own. The tag must match main/version.h or the run
+# fails before anything is published.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: verify tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag must match main/version.h
+        id: check
+        run: |
+          tag='${{ github.ref_name }}'
+          version=$(sed -n 's/^#define[[:space:]][[:space:]]*HMS_ESP_APC_VERSION[[:space:]][[:space:]]*"\([^"]*\)".*/\1/p' main/version.h)
+          if [ -z "$version" ]; then
+            echo "::error file=main/version.h::could not parse HMS_ESP_APC_VERSION"
+            exit 1
+          fi
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::tag $tag does not match main/version.h ($version). Bump version.h and retag."
+            exit 1
+          fi
+          if ! grep -qx "## v$version" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::no '## v$version' section for this release"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: verify
+    uses: ./.github/workflows/build.yml
+    with:
+      artifact-name: firmware-release
+
+  publish:
+    name: publish release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware-release
+          path: dist
+
+      # Pull this version's section out of CHANGELOG.md: everything between its
+      # own "## vX.Y.Z" heading and the next "## " heading.
+      - name: Build release notes
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          awk -v tag="## v$VERSION" '$0 == tag {f=1; next} f && /^## / {exit} f' CHANGELOG.md > notes.md
+          {
+            echo
+            echo "## Install"
+            echo
+            echo "Updating a board already on v1.13.0 or later: upload \`hms-esp-apc-$VERSION.bin\` on the device's web UI OTA page."
+            echo
+            echo "Blank board, or anything on v1.11.0 or earlier: those builds predate the dual-OTA partition table, so the first hop has to be over USB."
+            echo
+            echo '```'
+            echo "esptool.py --chip esp32s3 write_flash 0x0 hms-esp-apc-$VERSION-merged.bin"
+            echo '```'
+            echo
+            echo "No credentials are baked in. A board with no saved WiFi comes up as the \`APC-XXXX\` SoftAP at 192.168.4.1 for setup, and NVS survives a reflash, so an already-provisioned board keeps its settings."
+          } >> notes.md
+          cat notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ needs.verify.outputs.version }}
+          body_path: notes.md
+          files: dist/*
+          fail_on_unmatched_files: true
