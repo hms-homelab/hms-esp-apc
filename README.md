@@ -78,14 +78,13 @@ Settings are stored in NVS, so they survive reflashing. The portal returns autom
 
 ### What it looks like built
 
-<!-- Drop the two photos into docs/images/ and uncomment this block.
-| The board and its two USB-C connections | Installed inside the UPS |
+<!-- Drop the photos into docs/images/, write your own captions, and uncomment.
+| | |
 |:---:|:---:|
 | [<img src="docs/images/board-wiring.jpg" width="380">](docs/images/board-wiring.jpg) | [<img src="docs/images/installed.jpg" width="380">](docs/images/installed.jpg) |
-| One USB-C in for 5V, one out to the UPS. That same 5V also feeds the UPS `VCC` pin. | The board runs off a buck converter inside the case, which is why OTA matters. |
 -->
 
-The two USB-C connections are the part people get wrong: one is **power in**, the other is the **host link to the UPS**. They are not interchangeable, and the UPS supplies no power on its port.
+The connection people get wrong is power. The link to the UPS and the board's own 5V supply are separate things, and the UPS port supplies nothing, so the board is powered externally with that same 5V routed to the UPS `VCC` pin as described above.
 
 ## Configuration
 
