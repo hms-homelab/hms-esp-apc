@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.14.1
+
+Decode fixes, all verified against the device's own HID report descriptor rather than assumed layouts.
+
+- Fix permanently-asserted `LB`: the `0x16` PresentStatus bit map was shifted one position, so `BatteryPresent` — set on every healthy UPS that has a battery — was read as low battery. Correct order is Charging, Discharging, ACPresent, BatteryPresent, BelowRemainingCapacityLimit, ShutdownImminent, RemainingTimeLimitExpired, CommunicationLost, NeedReplacement, Overload, VoltageNotRegulated. Read as 16-bit so NeedReplacement and Overload are reachable at all
+- Fix `0x06`: it is three byte-wide fields (Charging, Discharging, APCStatusFlag), not a bitfield. The old code read the vendor byte as status bits, so `0x06` and `0x16` fought over the same flags and the status string flapped between `OL` and `OL CHRG LB`
+- Unswap beeper and self-test: `0x18` is `AudibleAlarmControl`, `0x21` is `Test`. Self-test previously reported "Test passed" on a UPS that had never run one
+- Fix `0x36`: it is `APCLineFailCause` (the last transfer reason), not input frequency — this UPS exposes no frequency usage anywhere
+- Fix `0x13` (`ACPresent`, was published as `delay_reboot=1`) and `0x14` (`BelowRemainingCapacityLimit` + `ShutdownImminent`, was read as a shutdown delay)
+- Add `0x40`/`0x41`, the real `APCDelayBeforeReboot` / `APCDelayBeforeShutdown`, and poll them
+- Fix `0x17`: `RemainingTimeLimit`, not a reboot timer. Drop the `reboot_timer` sensor — this UPS declares no `DelayBeforeReboot` usage
+- Stop publishing `0x10` and `0x12` (`CapacityGranularity2`/`1`) as beeper status and runtime threshold
+- Decode manufacture dates with the packed HID/SBS format (`(year-1980)<<9 | month<<5 | day`); `battery_mfr_date` now reads `2022/05/26` instead of `21690 days`
+- Read identity from USB string descriptors, which the HID report descriptor only references by index: manufacturer, model, serial, firmware revision, and battery chemistry. `battery_type` was reporting `NiMH` on a lead-acid UPS because the string index (4) was being decoded as a chemistry enum; it now reads `PbAc`
+- Strip APC's space padding and split the firmware revision out of `iProduct` (`"Back-UPS XS 1000M FW:945.d11 .D USB FW:"`)
+- Use the real manufacturer and model in the Home Assistant discovery payload instead of hardcoded strings; publish `firmware_version` and `ups_serial`
+- Add `hid_debug.c/.h` and `GET /hid`: fetches the HID report descriptor at enumeration and keeps the last raw payload of every report ID, tagged interrupt vs feature. These boards have no serial console once wired to the UPS — their native USB is the host link — so this is the only way to see what the device actually sends
+
 ## v1.14.0
 
 - Add SoftAP config portal with a catch-all DNS hijacker (`dns_hijack.c`): open AP `APC-XXXX` at `192.168.4.1`, any hostname resolves to the config page

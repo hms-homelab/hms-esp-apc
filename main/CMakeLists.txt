@@ -5,6 +5,7 @@ idf_component_register(
         "mqtt_manager.c"
         "apc_hid_parser.c"
         "usb_host_manager.c"
+        "hid_debug.c"
         "http_server.c"
         "dns_hijack.c"
     INCLUDE_DIRS

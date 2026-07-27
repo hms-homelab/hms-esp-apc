@@ -62,6 +62,7 @@
 
 #include "usb_host_manager.h"
 #include "apc_hid_parser.h"
+#include "hid_debug.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -91,6 +92,11 @@ static bool ups_connected = false;           // Is UPS physically connected?
 static SemaphoreHandle_t usb_mutex = NULL;   // Mutex for USB library access
 static usb_host_client_handle_t usb_client = NULL;  // Our USB client handle
 static usb_device_handle_t ups_device = NULL;       // Handle to the UPS device
+
+// Set when a UPS is claimed; the USB task then fetches the HID report descriptor.
+// The fetch cannot run inside the client event callback: waiting on a control
+// transfer pumps usb_host_client_handle_events(), which we are already inside.
+static bool need_report_descriptor = false;
 
 //══════════════════════════════════════════════════════════════════════════════
 // HID (Human Interface Device) CONFIGURATION
@@ -144,6 +150,7 @@ static void usb_host_client_event_cb(const usb_host_client_event_msg_t *event_ms
                     ESP_LOGE(TAG, "Failed to claim interface: %s", esp_err_to_name(err));
                 } else {
                     ESP_LOGI(TAG, "✅ HID interface claimed successfully");
+                    need_report_descriptor = true;
                 }
 
                 // Get configuration descriptor to inspect endpoints (after claiming)
@@ -184,6 +191,7 @@ static void usb_host_client_event_cb(const usb_host_client_event_msg_t *event_ms
             if (event_msg->dev_gone.dev_hdl == ups_device) {
                 ups_connected = false;
                 ups_device = NULL;
+                need_report_descriptor = false;
                 ESP_LOGI(TAG, "❌ APC UPS disconnected");
             }
             break;
@@ -395,6 +403,232 @@ static esp_err_t get_hid_report(uint8_t report_id, uint8_t *buffer, size_t buffe
     // Release mutex
     xSemaphoreGive(transfer_mutex);
     return err;
+}
+
+//══════════════════════════════════════════════════════════════════════════════
+// GET_DESCRIPTOR(Report): FETCH THE HID REPORT DESCRIPTOR
+//══════════════════════════════════════════════════════════════════════════════
+// The report descriptor is the device's own description of every report: which
+// usages it carries, in what order, and at which bit offset. Everything the
+// parser currently hardcodes is spelled out in here. Standard request:
+//   bmRequestType 0x81 (Device-to-Host, Standard, Interface)
+//   bRequest      0x06 (GET_DESCRIPTOR)
+//   wValue        0x2200 (type 0x22 = Report, index 0)
+//   wIndex        interface number
+static esp_err_t get_hid_report_descriptor(uint8_t *buffer, size_t buffer_size, size_t *actual_length)
+{
+    if (ups_device == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(transfer_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to acquire transfer mutex for GET_DESCRIPTOR");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    usb_transfer_t *transfer;
+    esp_err_t err = usb_host_transfer_alloc(buffer_size + 8, 0, &transfer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to allocate descriptor transfer: %s", esp_err_to_name(err));
+        xSemaphoreGive(transfer_mutex);
+        return err;
+    }
+
+    transfer->device_handle = ups_device;
+    transfer->bEndpointAddress = 0x00;
+    transfer->callback = transfer_callback;
+    transfer->context = NULL;
+    transfer->num_bytes = buffer_size + 8;
+    transfer->timeout_ms = 1000;
+
+    usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
+    setup->bmRequestType = 0x81;      // Device-to-Host, Standard, Interface
+    setup->bRequest = 0x06;           // GET_DESCRIPTOR
+    setup->wValue = (0x22 << 8) | 0;  // Report descriptor, index 0
+    setup->wIndex = HID_INTERFACE;
+    setup->wLength = buffer_size;
+
+    if (transfer_done == NULL) {
+        transfer_done = xSemaphoreCreateBinary();
+        if (transfer_done == NULL) {
+            usb_host_transfer_free(transfer);
+            xSemaphoreGive(transfer_mutex);
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    err = usb_host_transfer_submit_control(usb_client, transfer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to submit GET_DESCRIPTOR: %s", esp_err_to_name(err));
+        usb_host_transfer_free(transfer);
+        xSemaphoreGive(transfer_mutex);
+        return err;
+    }
+
+    // Same pump-both-event-loops wait as GET_REPORT
+    const int max_wait_ms = 2000;
+    const int poll_interval_ms = 10;
+    int waited_ms = 0;
+    bool transfer_complete = false;
+
+    while (waited_ms < max_wait_ms && !transfer_complete) {
+        uint32_t event_flags;
+        usb_host_lib_handle_events(pdMS_TO_TICKS(5), &event_flags);
+        usb_host_client_handle_events(usb_client, pdMS_TO_TICKS(5));
+        if (xSemaphoreTake(transfer_done, 0) == pdTRUE) {
+            transfer_complete = true;
+            break;
+        }
+        waited_ms += poll_interval_ms;
+    }
+
+    if (transfer_complete && transfer->status == USB_TRANSFER_STATUS_COMPLETED) {
+        size_t n = transfer->actual_num_bytes - 8;
+        if (n > 0 && n <= buffer_size) {
+            memcpy(buffer, transfer->data_buffer + 8, n);
+            *actual_length = n;
+            err = ESP_OK;
+        } else {
+            err = ESP_ERR_INVALID_SIZE;
+        }
+    } else {
+        ESP_LOGW(TAG, "GET_DESCRIPTOR(Report) failed, status=%d, complete=%d",
+                 transfer->status, transfer_complete);
+        err = ESP_FAIL;
+    }
+
+    usb_host_transfer_free(transfer);
+    xSemaphoreGive(transfer_mutex);
+    return err;
+}
+
+//══════════════════════════════════════════════════════════════════════════════
+// GET_DESCRIPTOR(String): THE UPS's OWN IDENTITY TEXT
+//══════════════════════════════════════════════════════════════════════════════
+// The HID report descriptor never carries manufacturer/model/serial text — it
+// only carries String Indices (report 0x01 -> idx 2 iProduct, 0x02 -> idx 3
+// iSerialNumber, 0x03 -> idx 4 iDeviceChemistry, 0x0A -> idx 1 iManufacturer,
+// 0x7E -> idx 7 APC_UPS_FirmwareRevision). The text lives in string descriptors,
+// which are a separate standard request:
+//   bmRequestType 0x80 (Device-to-Host, Standard, Device)
+//   bRequest      0x06 (GET_DESCRIPTOR)
+//   wValue        0x03NN (type 3 = String, index NN)
+//   wIndex        0x0409 (US English)
+// Strings are UTF-16LE; we fold to ASCII, which is all APC uses here.
+static esp_err_t get_string_descriptor(uint8_t index, char *out, size_t out_size)
+{
+    if (ups_device == NULL || index == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(transfer_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    const size_t kBufSize = 128;
+    usb_transfer_t *transfer;
+    esp_err_t err = usb_host_transfer_alloc(kBufSize + 8, 0, &transfer);
+    if (err != ESP_OK) {
+        xSemaphoreGive(transfer_mutex);
+        return err;
+    }
+
+    transfer->device_handle = ups_device;
+    transfer->bEndpointAddress = 0x00;
+    transfer->callback = transfer_callback;
+    transfer->context = NULL;
+    transfer->num_bytes = kBufSize + 8;
+    transfer->timeout_ms = 1000;
+
+    usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
+    setup->bmRequestType = 0x80;
+    setup->bRequest = 0x06;
+    setup->wValue = (0x03 << 8) | index;
+    setup->wIndex = 0x0409;
+    setup->wLength = kBufSize;
+
+    if (transfer_done == NULL) {
+        transfer_done = xSemaphoreCreateBinary();
+        if (transfer_done == NULL) {
+            usb_host_transfer_free(transfer);
+            xSemaphoreGive(transfer_mutex);
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    err = usb_host_transfer_submit_control(usb_client, transfer);
+    if (err != ESP_OK) {
+        usb_host_transfer_free(transfer);
+        xSemaphoreGive(transfer_mutex);
+        return err;
+    }
+
+    const int max_wait_ms = 2000;
+    int waited_ms = 0;
+    bool done = false;
+    while (waited_ms < max_wait_ms && !done) {
+        uint32_t event_flags;
+        usb_host_lib_handle_events(pdMS_TO_TICKS(5), &event_flags);
+        usb_host_client_handle_events(usb_client, pdMS_TO_TICKS(5));
+        if (xSemaphoreTake(transfer_done, 0) == pdTRUE) {
+            done = true;
+            break;
+        }
+        waited_ms += 10;
+    }
+
+    if (done && transfer->status == USB_TRANSFER_STATUS_COMPLETED) {
+        const uint8_t *d = transfer->data_buffer + 8;
+        int n = transfer->actual_num_bytes - 8;
+        // d[0] = total length, d[1] = 0x03, then UTF-16LE payload
+        if (n >= 4 && d[1] == 0x03) {
+            int chars = (d[0] - 2) / 2;
+            int o = 0;
+            for (int c = 0; c < chars && o < (int)out_size - 1; c++) {
+                uint16_t wc = d[2 + c * 2] | (d[3 + c * 2] << 8);
+                out[o++] = (wc >= 0x20 && wc < 0x7F) ? (char)wc : '?';
+            }
+            out[o] = '\0';
+            err = ESP_OK;
+        } else {
+            err = ESP_ERR_INVALID_SIZE;
+        }
+    } else {
+        err = ESP_FAIL;
+    }
+
+    usb_host_transfer_free(transfer);
+    xSemaphoreGive(transfer_mutex);
+    return err;
+}
+
+// Fetch every string index the report descriptor references.
+static void fetch_identity_strings(void)
+{
+    static const struct {
+        uint8_t index;
+        apc_string_id_t slot;
+        const char *label;
+    } kStrings[] = {
+        { 1, APC_STR_MANUFACTURER, "iManufacturer" },
+        { 2, APC_STR_MODEL,        "iProduct" },
+        { 3, APC_STR_SERIAL,       "iSerialNumber" },
+        { 4, APC_STR_CHEMISTRY,    "iDeviceChemistry" },
+        { 7, APC_STR_FIRMWARE,     "FirmwareRevision" },
+    };
+
+    for (size_t i = 0; i < sizeof(kStrings) / sizeof(kStrings[0]); i++) {
+        char buf[64] = {0};
+        if (get_string_descriptor(kStrings[i].index, buf, sizeof(buf)) == ESP_OK) {
+            ESP_LOGI(TAG, "🏷️  String %d (%s) = \"%s\"",
+                     kStrings[i].index, kStrings[i].label, buf);
+            apc_hid_set_string(kStrings[i].slot, buf);
+        } else {
+            ESP_LOGW(TAG, "🏷️  String %d (%s) unavailable",
+                     kStrings[i].index, kStrings[i].label);
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
 }
 
 // Read HID report from interrupt endpoint
@@ -630,8 +864,10 @@ void usb_host_task(void *arg)
         // === UPS CONFIGURATION ===
         0x52,  // Real power nominal (600W)
         0x15,  // Shutdown timer (-1 = not active)
-        0x10,  // Beeper status (enabled/disabled/muted)
-        0x18,  // Self-test result
+        0x18,  // Beeper status / AudibleAlarmControl (1=disabled,2=enabled,3=muted)
+        0x21,  // Self-test result (Power page 0x58 Test)
+        0x40,  // APCDelayBeforeReboot (vendor 0xFF86:0x7C)
+        0x41,  // APCDelayBeforeShutdown (vendor 0xFF86:0x7D)
     };
     const int num_poll_reports = sizeof(poll_reports) / sizeof(poll_reports[0]);
 
@@ -681,6 +917,21 @@ void usb_host_task(void *arg)
 
         // If UPS is connected, try to read HID reports
         if (ups_connected && ups_device != NULL) {
+            // One-shot: grab the device's own report descriptor so /hid can show
+            // the real bit layout instead of the parser's assumed one.
+            if (need_report_descriptor) {
+                need_report_descriptor = false;
+                static uint8_t desc[HID_DBG_DESC_MAX];
+                size_t desc_len = 0;
+                if (get_hid_report_descriptor(desc, sizeof(desc), &desc_len) == ESP_OK) {
+                    ESP_LOGI(TAG, "📄 HID report descriptor: %d bytes", (int)desc_len);
+                    hid_debug_set_descriptor(desc, desc_len);
+                } else {
+                    ESP_LOGW(TAG, "📄 HID report descriptor unavailable");
+                }
+                fetch_identity_strings();
+            }
+
             // Passive: Read interrupt transfers (UPS sends automatically)
             err = read_hid_report(report_buffer, sizeof(report_buffer), &report_len);
 
@@ -689,6 +940,8 @@ void usb_host_task(void *arg)
                 uint8_t report_id = report_buffer[0];
 
                 ESP_LOGD(TAG, "📥 HID Report ID: 0x%02X, Length: %d", report_id, report_len);
+
+                hid_debug_record(report_id, report_buffer, report_len, HID_DBG_SRC_INTERRUPT);
 
                 // Parse the report
                 apc_hid_parse_report(report_id, report_buffer, report_len, NULL);
@@ -704,6 +957,8 @@ void usb_host_task(void *arg)
                     err = get_hid_report(report_id, report_buffer, sizeof(report_buffer), &report_len);
 
                     if (err == ESP_OK && report_len > 0) {
+                        hid_debug_record(report_id, report_buffer, report_len, HID_DBG_SRC_FEATURE);
+
                         // Parse the polled report
                         apc_hid_parse_report(report_id, report_buffer, report_len, NULL);
                     }

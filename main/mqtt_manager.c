@@ -1,4 +1,5 @@
 #include "mqtt_manager.h"
+#include "apc_hid_parser.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "mqtt_client.h"
@@ -160,6 +161,8 @@ esp_err_t mqtt_publish_discovery(const char *sensor_name, const char *friendly_n
                  device_mac[3], device_mac[4], device_mac[5]);
     }
 
+    const ups_metrics_t *ident = apc_hid_get_metrics();
+
     // Build discovery payload with unique device ID
     snprintf(payload, sizeof(payload),
         "{"
@@ -169,11 +172,15 @@ esp_err_t mqtt_publish_discovery(const char *sensor_name, const char *friendly_n
         "\"device\":{"
             "\"identifiers\":[\"%s\"],"
             "\"name\":\"%s\","
-            "\"manufacturer\":\"APC\","
-            "\"model\":\"Back-UPS XS 1000M\""
+            "\"manufacturer\":\"%s\","
+            "\"model\":\"%s\""
         "}",
         friendly_name, mqtt_base_topic, sensor_name, device_id, sensor_name,
-        device_id, dev_name
+        device_id, dev_name,
+        /* Real identity from the UPS string descriptors, falling back to the
+         * old hardcoded values until they have been fetched. */
+        (ident->ups_manufacturer[0] != '\0') ? ident->ups_manufacturer : "APC",
+        (ident->ups_model[0] != '\0') ? ident->ups_model : "Back-UPS XS 1000M"
     );
 
     if (unit != NULL && strlen(unit) > 0) {

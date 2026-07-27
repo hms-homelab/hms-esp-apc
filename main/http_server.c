@@ -1,5 +1,6 @@
 #include "http_server.h"
 #include "apc_hid_parser.h"
+#include "hid_debug.h"
 #include "usb_host_manager.h"
 #include "wifi_manager.h"
 #include "esp_http_server.h"
@@ -7,6 +8,7 @@
 #include "esp_system.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "version.h"
@@ -220,7 +222,8 @@ static const char *PAGE_STYLE =
     ".online{color:#4caf50}.offline{color:#f44336}";
 
 static const char *PAGE_NAV =
-    "<div class='nav'><a href='/'>Config</a> | <a href='/status'>Status &amp; Logs</a></div>";
+    "<div class='nav'><a href='/'>Config</a> | <a href='/status'>Status &amp; Logs</a> | "
+    "<a href='/hid'>Raw HID</a></div>";
 
 /* ═══════════════ GET / — Config Page ═══════════════ */
 
@@ -511,6 +514,94 @@ static esp_err_t status_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ═══════════════ GET /hid — Raw HID Capture (plain text) ═══════════════ */
+
+/* Diagnostics for flag decoding. The parser assigns meanings to bit positions
+ * that were never read off the device, so a wrong flag looks exactly like bad
+ * data. This dumps what actually came over the wire: the report descriptor
+ * (the device's own definition of every bit) and the last raw bytes of every
+ * report ID seen. Plain text so it can be curl'd and diffed. */
+static esp_err_t hid_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/plain");
+    char line[256];
+
+    size_t desc_len = 0;
+    const uint8_t *desc = hid_debug_get_descriptor(&desc_len);
+
+    snprintf(line, sizeof(line), "# HID REPORT DESCRIPTOR (%u bytes)\n", (unsigned)desc_len);
+    httpd_resp_sendstr_chunk(req, line);
+
+    if (desc_len == 0) {
+        httpd_resp_sendstr_chunk(req, "(not captured — UPS not enumerated, or the "
+                                      "device STALLed GET_DESCRIPTOR)\n");
+    } else {
+        for (size_t i = 0; i < desc_len; i += 16) {
+            int pos = snprintf(line, sizeof(line), "%04X  ", (unsigned)i);
+            for (size_t j = 0; j < 16 && i + j < desc_len; j++) {
+                pos += snprintf(line + pos, sizeof(line) - pos, "%02X ", desc[i + j]);
+            }
+            snprintf(line + pos, sizeof(line) - pos, "\n");
+            httpd_resp_sendstr_chunk(req, line);
+        }
+    }
+
+    httpd_resp_sendstr_chunk(req,
+        "\n# RAW REPORTS (last payload per report ID)\n"
+        "# src=INT: pushed by the UPS on the interrupt endpoint\n"
+        "# src=FEAT: returned by GET_REPORT(Feature)\n"
+        "# chg=1 means the last payload differed from the one before it\n"
+        "#  id  src   n  count      age_s  chg  bytes\n");
+
+    static hid_dbg_report_t snap[HID_DBG_MAX_REPORTS];
+    int n = hid_debug_get_reports(snap, HID_DBG_MAX_REPORTS);
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+    for (int i = 0; i < n; i++) {
+        const hid_dbg_report_t *r = &snap[i];
+        int pos = snprintf(line, sizeof(line), "  %02X  %-4s  %2u  %6u  %9.1f    %d  ",
+                           r->report_id,
+                           r->src == HID_DBG_SRC_INTERRUPT ? "INT" : "FEAT",
+                           r->len, (unsigned)r->count,
+                           (now_ms - r->last_seen_ms) / 1000.0f,
+                           r->changed ? 1 : 0);
+        for (int j = 0; j < r->len; j++) {
+            pos += snprintf(line + pos, sizeof(line) - pos, "%02X ", r->data[j]);
+        }
+        snprintf(line + pos, sizeof(line) - pos, "\n");
+        httpd_resp_sendstr_chunk(req, line);
+    }
+
+    if (n == 0) {
+        httpd_resp_sendstr_chunk(req, "(no reports seen yet)\n");
+    }
+
+    /* What the parser made of it, so a wrong bit shows up next to its cause. */
+    const ups_metrics_t *m = apc_hid_get_metrics();
+
+    char ident[384];
+    snprintf(ident, sizeof(ident),
+             "\n# IDENTITY (USB string descriptors, not the report descriptor)\n"
+             "manufacturer = %s\nmodel        = %s\nserial       = %s\n"
+             "firmware     = %s\nchemistry    = %s\n",
+             m->ups_manufacturer, m->ups_model, m->ups_serial,
+             m->firmware_version, m->battery_type);
+    httpd_resp_sendstr_chunk(req, ident);
+    snprintf(line, sizeof(line),
+             "\n# DECODED\nstatus=%s charge=%.0f%% runtime=%.0fs "
+             "low_charge_thr=%.0f%% low_runtime_thr=%.0fs\n"
+             "flags: OL=%d DISCHRG=%d CHRG=%d LB=%d OVER=%d RB=%d BOOST=%d TRIM=%d\n",
+             m->status_string, m->battery_charge, m->battery_runtime,
+             m->low_battery_charge_threshold, m->low_battery_runtime_threshold,
+             m->status.online, m->status.discharging, m->status.charging,
+             m->status.low_battery, m->status.overload, m->status.replace_battery,
+             m->status.boost, m->status.trim);
+    httpd_resp_sendstr_chunk(req, line);
+
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
 /* ═══════════════ POST /save — Save Config & Reboot ═══════════════ */
 
 static esp_err_t save_handler(httpd_req_t *req)
@@ -617,9 +708,11 @@ esp_err_t http_server_start(app_config_t *config)
     const httpd_uri_t status_uri = { .uri = "/status",  .method = HTTP_GET,  .handler = status_handler   };
     const httpd_uri_t save_uri   = { .uri = "/save",    .method = HTTP_POST, .handler = save_handler     };
     const httpd_uri_t ota_uri    = { .uri = "/ota",     .method = HTTP_POST, .handler = ota_post_handler };
+    const httpd_uri_t hid_uri    = { .uri = "/hid",     .method = HTTP_GET,  .handler = hid_handler      };
 
     httpd_register_uri_handler(server, &root_uri);
     httpd_register_uri_handler(server, &status_uri);
+    httpd_register_uri_handler(server, &hid_uri);
     httpd_register_uri_handler(server, &save_uri);
     httpd_register_uri_handler(server, &ota_uri);
 

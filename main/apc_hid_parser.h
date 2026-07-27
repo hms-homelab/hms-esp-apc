@@ -58,6 +58,13 @@ typedef struct {
     char driver_version[16];
     char beeper_status[16];            // enabled/disabled/muted
     char self_test_result[64];
+
+    // Identity, read from USB string descriptors (see apc_hid_set_string).
+    // The HID report descriptor only carries string INDICES for these; the
+    // strings themselves live in the device's string descriptors.
+    char ups_manufacturer[40];
+    char ups_model[40];
+    char ups_serial[32];
     char power_failure_status[16];     // OK or reason
 
     // Status
@@ -67,6 +74,17 @@ typedef struct {
     uint32_t last_update_ms;
     bool valid;
 } ups_metrics_t;
+
+/* String-descriptor slots, keyed by the index the report descriptor cites. */
+typedef enum {
+    APC_STR_MANUFACTURER = 0,  /* idx 1: iManufacturer / iOEMInformation */
+    APC_STR_MODEL,             /* idx 2: iProduct */
+    APC_STR_SERIAL,            /* idx 3: iSerialNumber */
+    APC_STR_CHEMISTRY,         /* idx 4: iDeviceChemistry */
+    APC_STR_FIRMWARE,          /* idx 7: APC_UPS_FirmwareRevision */
+} apc_string_id_t;
+
+void apc_hid_set_string(apc_string_id_t which, const char *value);
 
 void apc_hid_parser_init(void);
 bool apc_hid_parse_report(uint8_t report_id, const uint8_t *data, size_t length, ups_metrics_t *metrics);

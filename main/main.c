@@ -70,13 +70,13 @@ static void mqtt_publish_task(void *arg)
     // Note: delay_shutdown removed - not available in HID reports
     // mqtt_publish_discovery("delay_shutdown", "Shutdown Delay", "s", "duration");
     mqtt_publish_discovery("delay_reboot", "Reboot Delay", "s", "duration");
-    mqtt_publish_discovery("reboot_timer", "Reboot Timer", "s", "duration");
     mqtt_publish_discovery("shutdown_timer", "Shutdown Timer", "s", "duration");
     mqtt_publish_discovery("self_test_result", "Self-Test Result", NULL, NULL);
 
     // Device information
-    // Note: firmware_version not available - requires USB string descriptors
-    // mqtt_publish_discovery("firmware_version", "Firmware Version", NULL, NULL);
+    // Now available: fetched from USB string descriptor 7 (APC_UPS_FirmwareRevision)
+    mqtt_publish_discovery("firmware_version", "Firmware Version", NULL, NULL);
+    mqtt_publish_discovery("ups_serial", "Serial Number", NULL, NULL);
     mqtt_publish_discovery("driver_name", "Driver Name", NULL, NULL);
     mqtt_publish_discovery("driver_version", "Driver Version", NULL, NULL);
     mqtt_publish_discovery("driver_state", "Driver State", NULL, NULL);
@@ -181,10 +181,14 @@ static void mqtt_publish_task(void *arg)
                     mqtt_publish_metric("delay_reboot", metrics->delay_before_reboot, "s");
                 }
 
-                // Active timers (Report 0x17 = reboot, Report 0x15 = shutdown)
-                // These can be negative (-1 = not active)
-                mqtt_publish_metric("reboot_timer", metrics->reboot_timer, "s");
+                // Shutdown timer (Report 0x15 = Power page 0x57 DelayBeforeShutdown).
+                // Can be negative (-1 = not active).
                 mqtt_publish_metric("shutdown_timer", metrics->shutdown_timer, "s");
+
+                // No reboot_timer: report 0x17 turned out to be
+                // PowerSummary.RemainingTimeLimit, and this UPS exposes no
+                // DelayBeforeReboot usage anywhere in its report descriptor.
+                // Publishing a hardcoded 0 would just look like a live reading.
 
                 // Self-test result
                 if (strlen(metrics->self_test_result) > 0) {
@@ -192,7 +196,12 @@ static void mqtt_publish_task(void *arg)
                 }
 
                 // Device information
-                // firmware_version removed - not available in HID reports
+                if (strlen(metrics->firmware_version) > 0) {
+                    mqtt_publish_string("firmware_version", metrics->firmware_version);
+                }
+                if (strlen(metrics->ups_serial) > 0) {
+                    mqtt_publish_string("ups_serial", metrics->ups_serial);
+                }
                 if (strlen(metrics->driver_name) > 0) {
                     mqtt_publish_string("driver_name", metrics->driver_name);
                 }
