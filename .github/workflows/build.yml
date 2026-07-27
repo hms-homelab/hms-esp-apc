@@ -26,7 +26,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # main/version.h is the single source of truth. CMakeLists.txt parses the
       # same line for PROJECT_VER; the assertion below proves the two agree.
@@ -75,7 +75,7 @@ jobs:
           cp build/merged.bin              "dist/hms-esp-apc-$v-merged.bin"
           ls -l dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           # inputs is empty on a manual run, so fall back to a fixed name.
           name: ${{ inputs.artifact-name || 'firmware' }}
