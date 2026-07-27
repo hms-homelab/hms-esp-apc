@@ -21,21 +21,6 @@ This firmware decodes the APC HID report descriptor **on the microcontroller**. 
 
 The practical result: no server to keep running, no daemon to configure, no parsing layer to maintain. A five dollar chip is the entire stack.
 
-### Compared to the alternatives
-
-Other ESP32 UPS projects are worth knowing about, and each does something well. The gap this one fills is the combination of on-device HID decoding, native MQTT, and updates that do not need a cable.
-
-| | **hms-esp-apc** | [ludoux/esp32-nut-server-usbhid](https://github.com/ludoux/esp32-nut-server-usbhid) | [Borchev/esp32-usb-nut-server](https://github.com/Borchev/esp32-usb-nut-server) | [syssi/esphome-apc-ups](https://github.com/syssi/esphome-apc-ups) |
-|---|:---:|:---:|:---:|:---:|
-| Link to the UPS | USB HID | USB HID | USB HID | RS232, needs a MAX3232 |
-| Report decoded on-device | yes | yes | yes | n/a |
-| Speaks to Home Assistant | MQTT auto-discovery | via a NUT client | via a NUT client | ESPHome native |
-| WiFi set up without rebuilding | web UI + captive portal | no, menuconfig | captive portal | ESPHome |
-| Firmware update over the air | yes | no | no | yes, via ESPHome |
-| Reconnects on its own | yes | no | yes | yes |
-
-If you want the NUT protocol specifically, because something other than Home Assistant consumes it, use one of the NUT servers. If your UPS only has a serial port, use the ESPHome component. If you want a UPS in Home Assistant with nothing else running, this is the one.
-
 ### Monitoring several UPS units together
 
 One board handles one UPS, and Home Assistant will happily show any number of them side by side. If you want a single place to read your whole home's backup power at a glance, [**hms-nut**](https://github.com/hms-homelab/hms-nut) is the companion service for it: a C++ microservice that aggregates every UPS in the house, keeps history in PostgreSQL, and serves its own Angular dashboard.
