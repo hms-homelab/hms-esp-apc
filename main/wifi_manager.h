@@ -25,6 +25,13 @@ esp_err_t wifi_wait_connected(uint32_t timeout_ms);
  * http://192.168.4.1/ . Used when there is no saved config, or when joining fails. */
 esp_err_t wifi_start_portal(void);
 
+/* Temporarily drop WiFi power save so a bulk transfer runs at full rate.
+ * Used around OTA: WIFI_PS_MIN_MODEM sleeps between DTIM beacons, which caps
+ * throughput at tens of KB/s and makes a ~1MB upload crawl or time out.
+ * Costs roughly 40-80mA while boosted, so keep the window short and always
+ * pair the calls. */
+void wifi_power_save_boost(bool on);
+
 bool        wifi_is_connected(void);
 bool        wifi_portal_active(void);
 const char *wifi_portal_ssid(void);

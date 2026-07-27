@@ -39,6 +39,20 @@ menu "APC UPS Configuration"
     # charge LED are hardwired; the WS2812 on GPIO48 is the only one software
     # can drive, so red is produced by the RGB pixel.
 
+    config WIFI_PS_NONE
+        bool "Disable WiFi power save permanently (faster, ~40-80mA more)"
+        default n
+        help
+          The IDF default (WIFI_PS_MIN_MODEM) sleeps the radio between DTIM
+          beacons. Measured on these boards: ~81ms LAN round trip and only
+          18-76 KB/s, which is why a ~1MB OTA crawls.
+
+          Leaving this off keeps the low idle draw and instead lifts power save
+          only for the duration of an OTA upload, which is when throughput
+          actually matters. Turn it on if the board is mains-powered and you
+          want consistently low latency, at the cost of continuous extra draw
+          and heat inside a UPS case.
+
     config STATUS_LED_ENABLED
         bool "Enable status LED"
         default y

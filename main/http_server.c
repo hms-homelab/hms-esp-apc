@@ -370,7 +370,10 @@ static esp_err_t root_handler(httpd_req_t *req)
 
 /* ═══════════════ POST /ota — Firmware Update (esp_ota) ═══════════════ */
 
-static esp_err_t ota_post_handler(httpd_req_t *req)
+/* 4KB matches the flash sector size and the proven cpapdash-push-c3 loop. */
+#define OTA_CHUNK 4096
+
+static esp_err_t ota_post_handler_inner(httpd_req_t *req)
 {
     const esp_partition_t *update = esp_ota_get_next_update_partition(NULL);
     if (update == NULL) {
@@ -386,15 +389,24 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    /* Pass the real image size, NOT OTA_SIZE_UNKNOWN. With OTA_SIZE_UNKNOWN
+       esp_ota_begin() erases the WHOLE partition, and ota_0 is 0x1E0000
+       (1.875MB). Erasing more than ~1280K takes over 5s, which trips the
+       default 5s task watchdog and reboots the device mid-upload
+       (espressif/esp-idf#578). The client does not notice immediately because
+       it keeps filling TCP buffers while the device is blocked in the erase,
+       so the upload appears to die around 130KB after ~20s rather than at
+       byte zero. With the true size, only the sectors actually needed are
+       erased. */
     esp_ota_handle_t ota = 0;
-    esp_err_t err = esp_ota_begin(update, OTA_SIZE_UNKNOWN, &ota);
+    esp_err_t err = esp_ota_begin(update, (size_t)req->content_len, &ota);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "OTA: esp_ota_begin failed: %s", esp_err_to_name(err));
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_begin failed");
         return ESP_FAIL;
     }
 
-    char *buf = malloc(2048);
+    char *buf = malloc(OTA_CHUNK);
     if (!buf) {
         esp_ota_abort(ota);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
@@ -403,7 +415,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
 
     int remaining = req->content_len;
     while (remaining > 0) {
-        int r = httpd_req_recv(req, buf, remaining < 2048 ? remaining : 2048);
+        int r = httpd_req_recv(req, buf, remaining < OTA_CHUNK ? remaining : OTA_CHUNK);
         if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;   /* retry on transient timeout */
         if (r <= 0) {
             ESP_LOGE(TAG, "OTA: recv error (%d) with %d bytes left", r, remaining);
@@ -701,6 +713,18 @@ static esp_err_t save_handler(httpd_req_t *req)
     esp_restart();
 
     return ESP_OK;
+}
+
+/* Lift WiFi power save for the upload, then restore it. Wrapping rather than
+ * restoring at each of the inner handler's several exit paths, which is easy to
+ * get wrong. On success the inner handler reboots, so the restore is skipped;
+ * that is fine because a reboot re-applies the configured mode anyway. */
+static esp_err_t ota_post_handler(httpd_req_t *req)
+{
+    wifi_power_save_boost(true);
+    esp_err_t rc = ota_post_handler_inner(req);
+    wifi_power_save_boost(false);
+    return rc;
 }
 
 /* ═══════════════ LED Probe ═══════════════ */

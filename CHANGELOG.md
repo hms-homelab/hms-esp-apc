@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.14.3
+
+- **Fix OTA rebooting the device mid-upload.** `esp_ota_begin()` was called with
+  `OTA_SIZE_UNKNOWN`, which erases the *entire* partition. `ota_0` is `0x1E0000`
+  (1.875 MB), and erasing more than ~1280K takes over 5s, tripping the default
+  task watchdog (espressif/esp-idf#578). Passing the real `content_len` erases
+  only the sectors needed
+- The failure looked like a network timeout and was not: the client keeps
+  filling TCP buffers while the device is blocked in the erase, so uploads died
+  around 130 KB after ~20s instead of at byte zero. Confirmed it was a reboot by
+  watching the `/status` log ring go from 75 lines to 0 across an attempt
+- Retrying did not help, because every attempt restarts the full erase
+- Lift WiFi power save for the duration of an OTA (`wifi_power_save_boost`) and
+  restore it after. The IDF default `WIFI_PS_MIN_MODEM` sleeps the radio between
+  DTIM beacons, which held uploads to ~6 KB/s. Measured after: **61.7 KB/s, a
+  full 1 MB image in 17s on the first attempt**
+- Add `CONFIG_WIFI_PS_NONE` to disable power save permanently, for mains-powered
+  boards that want low latency and can afford ~40-80mA continuous
+- OTA read buffer 2048 -> 4096, matching the flash sector size
+
+
 ## v1.14.2
 
 - Add a status LED: solid red once WiFi is joined, slow red pulse (1s on / 1s off) while it is not. In practice the LED is initialised after the 10s boot delay and a normal join takes a couple of seconds, so what you see is dark, then solid; the pulse is really only visible when a join is failing or the config portal is up, which is when it matters

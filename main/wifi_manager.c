@@ -119,22 +119,41 @@ esp_err_t wifi_connect_sta(const char *ssid, const char *password)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    /* NOTE, deliberate: WiFi power save is left at the IDF default of
-       WIFI_PS_MIN_MODEM. The radio therefore sleeps between DTIM beacons, which
-       costs latency and bulk throughput. Measured on two units, 2026-07-27:
-       0% packet loss on both, but ~81ms average LAN round trip, and 18.7 KB/s
-       and 75.9 KB/s respectively for an HTTP download. That is why a ~1MB OTA
-       upload can take minutes, and why the HTTP server uses 300s socket
-       timeouts instead of the usual few seconds.
+    /* WiFi power save. The IDF default WIFI_PS_MIN_MODEM sleeps the radio
+       between DTIM beacons. Measured on two units, 2026-07-27: no packet loss,
+       but ~81ms average LAN round trip and only 18.7 / 75.9 KB/s over HTTP,
+       which is what made ~1MB OTA uploads stall and time out.
 
-       esp_wifi_set_ps(WIFI_PS_NONE) here would raise throughput substantially,
-       at the cost of roughly 40-80mA of extra continuous current. It is NOT
-       enabled because these boards are commonly mounted inside the UPS case on
-       a small buck converter, where the extra constant draw and heat are a
-       worse trade than a slow OTA. Revisit only with a thermal measurement. */
+       Default now: keep MIN_MODEM for the low idle draw, but lift power save
+       for the duration of an OTA (wifi_power_save_boost, called around the
+       upload), which is the only time bulk throughput matters. Full-rate costs
+       roughly 40-80mA continuous, which is a poor trade for a board sitting
+       inside a UPS case on a small buck converter, but it is a fine trade for
+       the ~30s of an upload.
+
+       CONFIG_WIFI_PS_NONE=y disables power save permanently instead. */
+
+#if CONFIG_WIFI_PS_NONE
+    /* Power save off everywhere: full throughput, ~40-80mA extra continuous. */
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    ESP_LOGI(TAG, "📶 WiFi power save: OFF (max throughput)");
+#else
+    ESP_LOGI(TAG, "📶 WiFi power save: MIN_MODEM (boosted during OTA)");
+#endif
 
     ESP_LOGI(TAG, "WiFi initialization complete. Connecting to SSID:%s", ssid);
     return ESP_OK;
+}
+
+void wifi_power_save_boost(bool on)
+{
+#if CONFIG_WIFI_PS_NONE
+    (void)on;   /* already off permanently, nothing to toggle */
+#else
+    esp_err_t err = esp_wifi_set_ps(on ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
+    ESP_LOGI(TAG, "📶 WiFi power save %s%s", on ? "OFF (boost)" : "back ON",
+             err == ESP_OK ? "" : " [failed]");
+#endif
 }
 
 esp_err_t wifi_init_sta(const char *ssid, const char *password)
