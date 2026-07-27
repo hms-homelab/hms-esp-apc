@@ -19,7 +19,7 @@ Most projects treat the UPS as something a *computer* talks to. NUT and apcupsd 
 
 This firmware decodes the APC HID report descriptor **on the microcontroller**. `apc_hid_parser.c` walks the report, resolves usage pages to real units, and produces finished values: battery runtime in seconds, load as a percentage, the reason for the last transfer to battery. What leaves the chip is already Home Assistant entities.
 
-The practical result: no server to keep running, no daemon to configure, no parsing layer to maintain. A five dollar chip is the entire stack.
+The practical result: no server to keep running, no daemon to configure, no parsing layer to maintain. The microcontroller is the entire stack.
 
 ### Monitoring several UPS units together
 
