@@ -119,6 +119,20 @@ esp_err_t wifi_connect_sta(const char *ssid, const char *password)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    /* NOTE, deliberate: WiFi power save is left at the IDF default of
+       WIFI_PS_MIN_MODEM. The radio therefore sleeps between DTIM beacons, which
+       costs latency and bulk throughput. Measured on two units, 2026-07-27:
+       0% packet loss on both, but ~81ms average LAN round trip, and 18.7 KB/s
+       and 75.9 KB/s respectively for an HTTP download. That is why a ~1MB OTA
+       upload can take minutes, and why the HTTP server uses 300s socket
+       timeouts instead of the usual few seconds.
+
+       esp_wifi_set_ps(WIFI_PS_NONE) here would raise throughput substantially,
+       at the cost of roughly 40-80mA of extra continuous current. It is NOT
+       enabled because these boards are commonly mounted inside the UPS case on
+       a small buck converter, where the extra constant draw and heat are a
+       worse trade than a slow OTA. Revisit only with a thermal measurement. */
+
     ESP_LOGI(TAG, "WiFi initialization complete. Connecting to SSID:%s", ssid);
     return ESP_OK;
 }
