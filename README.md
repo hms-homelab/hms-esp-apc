@@ -18,7 +18,7 @@ Everything is configurable from the board itself in a browser: WiFi, MQTT, publi
 
 The status page shows live metrics next to the HID decode as it happens, which is what you want when bringing up a UPS model for the first time.
 
-![The live status page, showing metrics and the HID decode log](docs/images/status-
+![The live status page, showing metrics and the HID decode log](docs/images/status-page.png)
 
 
 This firmware decodes the APC HID report descriptor **on the microcontroller**. `apc_hid_parser.c` walks the report, resolves usage pages to real units, and produces finished values: battery runtime in seconds, load as a percentage, the reason for the last transfer to battery. What leaves the chip is already Home Assistant entities.
