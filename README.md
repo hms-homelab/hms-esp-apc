@@ -36,6 +36,14 @@ Other ESP32 UPS projects are worth knowing about, and each does something well. 
 
 If you want the NUT protocol specifically, because something other than Home Assistant consumes it, use one of the NUT servers. If your UPS only has a serial port, use the ESPHome component. If you want a UPS in Home Assistant with nothing else running, this is the one.
 
+### Monitoring several UPS units together
+
+One board handles one UPS, and Home Assistant will happily show any number of them side by side. If you want more than that, [**hms-nut**](https://github.com/hms-homelab/hms-nut) is the companion service for it: a C++ microservice that aggregates many UPS units, keeps history in PostgreSQL, and serves its own Angular dashboard with live status, charts, power events, and cross-node comparison that overlays one metric across every monitored unit.
+
+It matters here because it reads this firmware's MQTT directly. Set `NUT_ENABLED=false` and it treats ESP32 monitors as first class sources, so you get multi-node history and charts with no NUT daemon anywhere, and no Home Assistant either if you do not want one. It can also poll a real `upsd` alongside, which is useful when some of your units are on NUT already and some are running this firmware.
+
+The two are independent. Use this firmware alone for a Home Assistant setup, add hms-nut when you outgrow one UPS or want history and charts of your own.
+
 ## Features
 
 - USB HID host communication with APC UPS, with the report parsed on-device
