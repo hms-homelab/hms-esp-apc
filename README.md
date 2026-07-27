@@ -89,7 +89,7 @@ Settings are stored in NVS, so they survive reflashing. The portal returns autom
 ![](docs/images/installed.jpg)
 -->
 
-The connection people get wrong is power. The link to the UPS and the board's own 5V supply are separate things, and the UPS port supplies nothing, so the board is powered externally with that same 5V routed to the UPS `VCC` pin as described above.
+The link to the UPS and the board's own 5V supply are separate things, and the UPS port supplies nothing, so the board is powered externally with that same 5V routed to the UPS `VCC` pin as described above.
 
 ## Configuration
 
@@ -122,7 +122,7 @@ NVS always wins over anything compiled in.
 | UPS Poll Interval | 5000 ms |
 | MQTT Publish Interval | 60000 ms |
 
-The credential defaults ship blank on purpose. A blank SSID is what marks a board unprovisioned and sends it to the setup portal. Keep real values in a local file you do not commit:
+
 
 ```bash
 # sdkconfig.local.defaults  (add to .gitignore)
