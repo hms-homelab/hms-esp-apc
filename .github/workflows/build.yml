@@ -1,5 +1,8 @@
-# Reusable firmware build. Called by ci.yml on every push/PR and by release.yml
-# when a tag is pushed, so a release ships exactly what CI already builds.
+# The firmware build. Called by release.yml when a tag is pushed, and runnable
+# by hand from the Actions tab to check a tree compiles before tagging it.
+#
+# There is deliberately no push or pull_request trigger: a tag build already
+# covers the tree, and anything else would mean two runs for one change.
 name: build firmware
 
 on:
@@ -14,6 +17,7 @@ on:
       version:
         description: Version parsed out of main/version.h
         value: ${{ jobs.build.outputs.version }}
+  workflow_dispatch:
 
 jobs:
   build:
@@ -73,6 +77,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.artifact-name }}
+          # inputs is empty on a manual run, so fall back to a fixed name.
+          name: ${{ inputs.artifact-name || 'firmware' }}
           path: dist/
           if-no-files-found: error
