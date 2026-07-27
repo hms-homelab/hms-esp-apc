@@ -1,10 +1,17 @@
 # hms-esp-apc
 
+*A Smart Home Maestro™ project.*
+
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-%23FFDD00.svg?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/aamat09)
 
 **An ESP32-S3 that speaks USB HID to your APC UPS directly and publishes 30+ entities to Home Assistant. No NUT, no apcupsd, no host machine.**
 
 Plug the board into the UPS, join its setup WiFi, type your credentials once, and the UPS appears in Home Assistant. Nothing else runs anywhere.
+
+| Home Assistant | Config and OTA | Live status |
+|:---:|:---:|:---:|
+| [<img src="docs/images/home-assistant.png" width="260">](docs/images/home-assistant.png) | [<img src="docs/images/web-ui.png" width="260">](docs/images/web-ui.png) | [<img src="docs/images/status-page.png" width="260">](docs/images/status-page.png) |
+| One device, 30+ entities, discovered automatically | Everything configurable in a browser, firmware included | Live metrics and the HID decode as it happens |
 
 ## Why this is different
 
@@ -13,6 +20,21 @@ Most projects treat the UPS as something a *computer* talks to. NUT and apcupsd 
 This firmware decodes the APC HID report descriptor **on the microcontroller**. `apc_hid_parser.c` walks the report, resolves usage pages to real units, and produces finished values: battery runtime in seconds, load as a percentage, the reason for the last transfer to battery. What leaves the chip is already Home Assistant entities.
 
 The practical result: no server to keep running, no daemon to configure, no parsing layer to maintain. A five dollar chip is the entire stack.
+
+### Compared to the alternatives
+
+Other ESP32 UPS projects are worth knowing about, and each does something well. The gap this one fills is the combination of on-device HID decoding, native MQTT, and updates that do not need a cable.
+
+| | **hms-esp-apc** | [ludoux/esp32-nut-server-usbhid](https://github.com/ludoux/esp32-nut-server-usbhid) | [Borchev/esp32-usb-nut-server](https://github.com/Borchev/esp32-usb-nut-server) | [syssi/esphome-apc-ups](https://github.com/syssi/esphome-apc-ups) |
+|---|:---:|:---:|:---:|:---:|
+| Link to the UPS | USB HID | USB HID | USB HID | RS232, needs a MAX3232 |
+| Report decoded on-device | yes | yes | yes | n/a |
+| Speaks to Home Assistant | MQTT auto-discovery | via a NUT client | via a NUT client | ESPHome native |
+| WiFi set up without rebuilding | web UI + captive portal | no, menuconfig | captive portal | ESPHome |
+| Firmware update over the air | yes | no | no | yes, via ESPHome |
+| Reconnects on its own | yes | no | yes | yes |
+
+If you want the NUT protocol specifically, because something other than Home Assistant consumes it, use one of the NUT servers. If your UPS only has a serial port, use the ESPHome component. If you want a UPS in Home Assistant with nothing else running, this is the one.
 
 ## Features
 
@@ -54,6 +76,17 @@ Settings are stored in NVS, so they survive reflashing. The portal returns autom
 > **Powering (important)**: the APC UPS USB port is a **5V sink**. It expects VBUS to be supplied to it and outputs no power, so you cannot power the ESP32-S3 from the UPS. Power the board externally (USB-C 5V and GND) and route that same 5V to the UPS `VCC` pin so the UPS USB interface comes up. That is one 5V source feeding both, not two. Tie all grounds together (external GND, board GND, UPS GND); a common ground is required for USB HID to enumerate.
 
 > **Note**: most ESP32-S3 dev boards expose the USB OTG pins on a dedicated connector. If your board uses the USB OTG port for programming over USB-CDC, you may need a hub or OTG adapter.
+
+### What it looks like built
+
+<!-- Drop the two photos into docs/images/ and uncomment this block.
+| The board and its two USB-C connections | Installed inside the UPS |
+|:---:|:---:|
+| [<img src="docs/images/board-wiring.jpg" width="380">](docs/images/board-wiring.jpg) | [<img src="docs/images/installed.jpg" width="380">](docs/images/installed.jpg) |
+| One USB-C in for 5V, one out to the UPS. That same 5V also feeds the UPS `VCC` pin. | The board runs off a buck converter inside the case, which is why OTA matters. |
+-->
+
+The two USB-C connections are the part people get wrong: one is **power in**, the other is the **host link to the UPS**. They are not interchangeable, and the UPS supplies no power on its port.
 
 ## Configuration
 
@@ -122,6 +155,8 @@ Once a board is running, firmware updates need no cable:
 The image is written to the inactive OTA slot, verified, and the board reboots into it.
 
 > The **first** OTA-capable image has to be flashed over USB once per board, because it is what lays down the A/B partition table. Earlier single-app builds have nowhere to stage an update.
+
+> **Expect the upload to be slow, and let it finish.** WiFi power save is left at the ESP-IDF default, so the radio sleeps between beacons. Measured on two units: no packet loss, but around 81ms of LAN round trip and download rates between 18 and 76 KB/s depending on placement. A 1MB image can therefore take minutes rather than seconds. The HTTP server allows 300 seconds per socket operation to accommodate this, so a transfer that looks stalled is usually just slow. If it fails part way through, the running firmware is untouched: the image is staged in the inactive slot and only becomes bootable once it verifies.
 
 ## Home Assistant entities
 
@@ -227,6 +262,19 @@ Contributions are welcome. Please open an issue or a pull request.
 2. Create a feature branch (`git checkout -b feature/my-change`)
 3. Commit your changes
 4. Push the branch and open a Pull Request
+
+## Disclaimer
+
+This firmware is provided as is, without warranty of any kind, express or implied. You use it at your own risk, and the author accepts no responsibility or liability for any direct, indirect, incidental, or consequential damage, loss, or injury arising from its use or misuse.
+
+Two specific risks are worth stating plainly, because this project involves your mains power equipment:
+
+- **A UPS is not a safe thing to open.** It contains mains voltage, a sealed lead-acid battery capable of very high short-circuit current, and capacitors that stay charged after it is unplugged. Mounting a board inside one is entirely your decision and your risk. Nothing here requires you to open the case; the board works just as well sitting outside it.
+- **Wrong wiring can destroy hardware.** Feeding voltage to the wrong pin can damage the ESP32-S3, the UPS USB interface, or both. Verify the connections against your own board's pinout before powering anything up. Doing any of this will likely void your UPS warranty.
+
+Smart Home Maestro™ is a trademark of the author, with a registration application pending. The `hms-` prefix across these repositories stands for it.
+
+This project is not affiliated with, endorsed by, or connected to APC or Schneider Electric. APC, Back-UPS, and Smart-UPS are trademarks of their respective owners, used here only to describe compatibility.
 
 ---
 
