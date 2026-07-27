@@ -271,7 +271,7 @@ Two specific risks are worth stating plainly, because this project involves your
 - **A UPS is not a safe thing to open.** It contains mains voltage, a sealed lead-acid battery capable of very high short-circuit current, and capacitors that stay charged after it is unplugged. Mounting a board inside one is entirely your decision and your risk. Nothing here requires you to open the case; the board works just as well sitting outside it.
 - **Wrong wiring can destroy hardware.** Feeding voltage to the wrong pin can damage the ESP32-S3, the UPS USB interface, or both. Verify the connections against your own board's pinout before powering anything up. Doing any of this will likely void your UPS warranty.
 
-Smart Home Maestro™ is a trademark of the author, with a registration application pending. The `hms-` prefix across these repositories stands for it.
+The `hms-` prefix marks this as part of [Home Management System](https://github.com/hms-homelab), a framework for fully local, private home automation aimed at self sufficiency. Smart Home Maestro™ is a trademark of the author, with a registration application pending.
 
 This project is not affiliated with, endorsed by, or connected to APC or Schneider Electric. APC, Back-UPS, and Smart-UPS are trademarks of their respective owners, used here only to describe compatibility.
 
