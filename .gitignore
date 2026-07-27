@@ -11,3 +11,6 @@ sdkconfig.old
 
 # local bench credentials — never commit
 sdkconfig.local.defaults
+
+# fetched by the IDF component manager
+managed_components/

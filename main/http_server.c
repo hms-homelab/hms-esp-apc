@@ -3,6 +3,7 @@
 #include "hid_debug.h"
 #include "usb_host_manager.h"
 #include "wifi_manager.h"
+#include "led_status.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -664,6 +665,64 @@ static esp_err_t save_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ═══════════════ LED Probe ═══════════════ */
+
+/* GET /led?gpio=48&ws=1&r=255&g=0&b=0   rebind and/or hold a colour
+ * GET /led?auto=1                        resume the status pattern
+ * GET /led                               report current binding
+ *
+ * Exists because these boards lose their serial console to USB host mode, so
+ * finding which pin the LED actually sits on would otherwise cost a reflash
+ * per guess. */
+static esp_err_t led_probe_handler(httpd_req_t *req)
+{
+    char q[128] = {0};
+    char v[16];
+    bool acted = false;
+
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        int gpio = -1;
+        bool ws = true;
+
+        if (httpd_query_key_value(q, "ws", v, sizeof(v)) == ESP_OK) ws = (atoi(v) != 0);
+
+        if (httpd_query_key_value(q, "gpio", v, sizeof(v)) == ESP_OK) {
+            gpio = atoi(v);
+            led_status_reinit(gpio, ws);
+            acted = true;
+        }
+
+        /* Binary-search an unknown indicator LED: /led?from=1&to=18&level=1 */
+        if (httpd_query_key_value(q, "from", v, sizeof(v)) == ESP_OK) {
+            int from = atoi(v), to = from, level = 1;
+            if (httpd_query_key_value(q, "to", v, sizeof(v)) == ESP_OK)    to = atoi(v);
+            if (httpd_query_key_value(q, "level", v, sizeof(v)) == ESP_OK) level = atoi(v);
+            httpd_resp_set_type(req, "text/plain");
+            return httpd_resp_sendstr(req, led_status_sweep(from, to, level));
+        }
+
+        if (httpd_query_key_value(q, "auto", v, sizeof(v)) == ESP_OK) {
+            led_status_auto();
+            acted = true;
+        } else {
+            int r = 0, g = 0, b = 0;
+            bool have = false;
+            if (httpd_query_key_value(q, "r", v, sizeof(v)) == ESP_OK) { r = atoi(v); have = true; }
+            if (httpd_query_key_value(q, "g", v, sizeof(v)) == ESP_OK) { g = atoi(v); have = true; }
+            if (httpd_query_key_value(q, "b", v, sizeof(v)) == ESP_OK) { b = atoi(v); have = true; }
+            if (have) {
+                led_status_test((uint8_t)r, (uint8_t)g, (uint8_t)b);
+                acted = true;
+            }
+        }
+    }
+
+    char out[192];
+    snprintf(out, sizeof(out), "%s%s\n", led_status_info(), acted ? "  [applied]" : "");
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_sendstr(req, out);
+}
+
 /* ═══════════════ Captive-Portal Redirect ═══════════════ */
 
 /* Any unmatched GET while the portal is up bounces to the config page. iOS and
@@ -708,6 +767,7 @@ esp_err_t http_server_start(app_config_t *config)
     const httpd_uri_t status_uri = { .uri = "/status",  .method = HTTP_GET,  .handler = status_handler   };
     const httpd_uri_t save_uri   = { .uri = "/save",    .method = HTTP_POST, .handler = save_handler     };
     const httpd_uri_t ota_uri    = { .uri = "/ota",     .method = HTTP_POST, .handler = ota_post_handler };
+    const httpd_uri_t led_uri    = { .uri = "/led",     .method = HTTP_GET,  .handler = led_probe_handler };
     const httpd_uri_t hid_uri    = { .uri = "/hid",     .method = HTTP_GET,  .handler = hid_handler      };
 
     httpd_register_uri_handler(server, &root_uri);
@@ -715,6 +775,7 @@ esp_err_t http_server_start(app_config_t *config)
     httpd_register_uri_handler(server, &hid_uri);
     httpd_register_uri_handler(server, &save_uri);
     httpd_register_uri_handler(server, &ota_uri);
+    httpd_register_uri_handler(server, &led_uri);
 
     /* Captive-portal catch-all, registered LAST so the real routes win, and only
      * in portal mode — in STA mode a stray URL must 404, not bounce to 192.168.4.1.

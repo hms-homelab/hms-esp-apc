@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.14.2
+
+- Add a status LED: solid red once WiFi is joined, slow red pulse (1s on / 1s off) while it is not. In practice the LED is initialised after the 10s boot delay and a normal join takes a couple of seconds, so what you see is dark, then solid; the pulse is really only visible when a join is failing or the config portal is up, which is when it matters
+- The LED is the onboard WS2812. This board is an **ESP32-S3-Zero**, so it sits on **GPIO21** (the ESP32-S3 SuperMini's GPIO48 is a different board and lights nothing here)
+- Pin and driver are Kconfig options (`STATUS_LED_GPIO`, `STATUS_LED_WS2812`, `STATUS_LED_ACTIVE_LOW`, `STATUS_LED_ENABLED`) so other boards can point elsewhere or compile it out
+- Add `GET /led` to rebind and test the LED at runtime: `?gpio=21&ws=1&r=255&g=0&b=0` holds a colour, `?from=1&to=48&level=1` drives a range of pins for locating an unknown indicator, `?auto=1` resumes the status pattern. These boards lose their serial console to USB host mode, so finding an LED pin would otherwise cost a reflash per guess
+- Note the range sweep only finds plain GPIO LEDs; an addressable WS2812 ignores a static level and needs the RMT timing, so use `?gpio=N&ws=1` to test those
+- Guard the strip handle with a mutex: rebinding from the HTTP task while the LED task was mid-refresh freed the handle underneath it and wedged the httpd worker, leaving the board pingable but serving nothing (and therefore un-OTA-able)
+- Add the `espressif/led_strip` dependency and commit `dependencies.lock`; ignore `managed_components/`
+
 ## v1.14.1
 
 Decode fixes, all verified against the device's own HID report descriptor rather than assumed layouts.

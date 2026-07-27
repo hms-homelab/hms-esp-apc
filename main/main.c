@@ -17,6 +17,7 @@
 #include "apc_hid_parser.h"
 #include "usb_host_manager.h"
 #include "http_server.h"
+#include "led_status.h"
 #include "version.h"
 
 static const char *TAG = "main";
@@ -306,6 +307,12 @@ void app_main(void)
     // Initialize HID parser
     apc_hid_parser_init();
 
+#if CONFIG_STATUS_LED_ENABLED
+    /* Starts in the slow red pulse; goes solid once WiFi is up. */
+    led_status_init();
+    led_status_set(LED_STATE_WIFI_DOWN);
+#endif
+
     /* Two ways into the config portal: nothing was ever saved to NVS, or the
      * saved network refuses us for WIFI_MAX_RETRY attempts. */
     bool start_portal = false;
@@ -334,6 +341,10 @@ void app_main(void)
         ESP_LOGW(TAG, "═══════════════════════════════════════");
         return;   /* httpd + DNS tasks keep running; saving reboots the device */
     }
+
+#if CONFIG_STATUS_LED_ENABLED
+    led_status_set(LED_STATE_WIFI_UP);   /* solid red: joined */
+#endif
 
     // Start HTTP server (config UI + status/logs)
     ESP_LOGI(TAG, "🌐 Starting HTTP server...");

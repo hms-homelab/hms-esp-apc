@@ -8,11 +8,13 @@ idf_component_register(
         "hid_debug.c"
         "http_server.c"
         "dns_hijack.c"
+        "led_status.c"
     INCLUDE_DIRS
         "."
     REQUIRES
         usb
     PRIV_REQUIRES
+        driver
         mqtt
         esp_hid
         nvs_flash

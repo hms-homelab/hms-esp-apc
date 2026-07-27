@@ -35,4 +35,28 @@ menu "APC UPS Configuration"
         range 5000 300000
         default 60000
 
+    # Status LED. On the ESP32-S3 SuperMini the red power LED and the blue
+    # charge LED are hardwired; the WS2812 on GPIO48 is the only one software
+    # can drive, so red is produced by the RGB pixel.
+
+    config STATUS_LED_ENABLED
+        bool "Enable status LED"
+        default y
+
+    config STATUS_LED_GPIO
+        int "Status LED GPIO"
+        depends on STATUS_LED_ENABLED
+        range 0 48
+        default 21
+
+    config STATUS_LED_WS2812
+        bool "LED is an addressable WS2812 (not a plain GPIO LED)"
+        depends on STATUS_LED_ENABLED
+        default y
+
+    config STATUS_LED_ACTIVE_LOW
+        bool "Plain LED is active low (wired to VCC)"
+        depends on STATUS_LED_ENABLED && !STATUS_LED_WS2812
+        default n
+
 endmenu
