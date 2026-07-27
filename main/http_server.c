@@ -33,6 +33,23 @@ static vprintf_like_t    original_vprintf_fn = NULL;
 
 static app_config_t *current_config = NULL;
 
+/* Drop ANSI CSI sequences (ESP_LOG colour codes) in place. The serial console
+   renders them; the web log view would print them as literal "[0;32m". */
+static void strip_ansi(char *s)
+{
+    char *w = s;
+    for (const char *r = s; *r; ) {
+        if (r[0] == '\033' && r[1] == '[') {
+            r += 2;
+            while (*r && (*r < '@' || *r > '~')) r++;  /* parameter + intermediate bytes */
+            if (*r) r++;                                /* final byte */
+            continue;
+        }
+        *w++ = *r++;
+    }
+    *w = '\0';
+}
+
 static int capture_vprintf(const char *fmt, va_list args)
 {
     va_list copy;
@@ -40,6 +57,7 @@ static int capture_vprintf(const char *fmt, va_list args)
 
     if (log_mutex && xSemaphoreTake(log_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
         vsnprintf(log_ring[log_write_idx], LOG_LINE_LEN, fmt, copy);
+        strip_ansi(log_ring[log_write_idx]);
         int len = strlen(log_ring[log_write_idx]);
         if (len > 0 && log_ring[log_write_idx][len - 1] == '\n')
             log_ring[log_write_idx][len - 1] = '\0';
@@ -232,6 +250,7 @@ static void send_page_header(httpd_req_t *req, const char *title, bool auto_refr
 {
     httpd_resp_sendstr_chunk(req,
         "<!DOCTYPE html><html><head>"
+        "<meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>");
     if (auto_refresh) {
         httpd_resp_sendstr_chunk(req, "<meta http-equiv='refresh' content='5'>");
@@ -248,7 +267,7 @@ static void send_page_header(httpd_req_t *req, const char *title, bool auto_refr
 
 static esp_err_t root_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
     char buf[512];
 
     send_page_header(req, "APC UPS Bridge", false);
@@ -277,13 +296,20 @@ static esp_err_t root_handler(httpd_req_t *req)
         name_esc, slug_esc);
     httpd_resp_sendstr_chunk(req, idbuf);
 
-    /* WiFi */
+    /* WiFi. Stored passwords are never sent back to the browser: this page is
+       unauthenticated, so anything rendered here is readable by anyone on the
+       LAN. A blank field on save means "keep the stored one" (see save_handler). */
     snprintf(buf, sizeof(buf),
         "<div class='card'><h2>WiFi</h2>"
         "<label>SSID</label><input name='wifi_ssid' value='%s'>"
-        "<label>Password</label><input name='wifi_pass' type='password' value='%s'>"
+        "<label>Password</label>"
+        "<input name='wifi_pass' type='password' placeholder='%s' autocomplete='new-password'>"
+        "<label style='font-weight:normal'>"
+        "<input type='checkbox' name='wifi_pass_clear' value='1' style='width:auto'> "
+        "Clear the saved password</label>"
         "</div>",
-        ssid_esc, current_config->wifi_pass);
+        ssid_esc,
+        current_config->wifi_pass[0] ? "unchanged, type to replace" : "(none set)");
     httpd_resp_sendstr_chunk(req, buf);
 
     /* MQTT */
@@ -295,8 +321,12 @@ static esp_err_t root_handler(httpd_req_t *req)
         "<label>Username</label><input name='mqtt_user' value='%s'>", user_esc);
     httpd_resp_sendstr_chunk(req, buf);
     snprintf(buf, sizeof(buf),
-        "<label>Password</label><input name='mqtt_pass' type='password' value='%s'>",
-        current_config->mqtt_pass);
+        "<label>Password</label>"
+        "<input name='mqtt_pass' type='password' placeholder='%s' autocomplete='new-password'>"
+        "<label style='font-weight:normal'>"
+        "<input type='checkbox' name='mqtt_pass_clear' value='1' style='width:auto'> "
+        "Clear the saved password</label>",
+        current_config->mqtt_pass[0] ? "unchanged, type to replace" : "(none set)");
     httpd_resp_sendstr_chunk(req, buf);
     httpd_resp_sendstr_chunk(req, "</div>");
 
@@ -328,7 +358,7 @@ static esp_err_t root_handler(httpd_req_t *req)
         "s.textContent='Uploading '+f.name+' ('+f.size+' bytes)... do not power off.';"
         "fetch('/ota',{method:'POST',body:f})"
         ".then(function(r){return r.text().then(function(t){return {ok:r.ok,t:t};});})"
-        ".then(function(o){s.textContent=o.ok?(o.t+' Rebooting — reconnect in ~20s.'):('Failed: '+o.t);})"
+        ".then(function(o){s.textContent=o.ok?(o.t+' Rebooting, reconnect in ~20s.'):('Failed: '+o.t);})"
         ".catch(function(e){s.textContent='Upload failed: '+e;});"
         "}"
         "</script>");
@@ -419,7 +449,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
 
 static esp_err_t status_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
     char buf[512];
 
     send_page_header(req, "APC UPS Status", true);
@@ -534,7 +564,7 @@ static esp_err_t hid_handler(httpd_req_t *req)
     httpd_resp_sendstr_chunk(req, line);
 
     if (desc_len == 0) {
-        httpd_resp_sendstr_chunk(req, "(not captured — UPS not enumerated, or the "
+        httpd_resp_sendstr_chunk(req, "(not captured: UPS not enumerated, or the "
                                       "device STALLed GET_DESCRIPTOR)\n");
     } else {
         for (size_t i = 0; i < desc_len; i += 16) {
@@ -620,13 +650,20 @@ static esp_err_t save_handler(httpd_req_t *req)
 
     if (get_form_value(body, "wifi_ssid", val, sizeof(val)))
         strlcpy(new_config.wifi_ssid, val, sizeof(new_config.wifi_ssid));
-    if (get_form_value(body, "wifi_pass", val, sizeof(val)))
+    /* Password fields render empty (never disclosed), so an empty submission
+       means "leave it alone". Only a non-empty value overwrites the stored one,
+       and the explicit checkbox is the only way to erase one. */
+    if (get_form_value(body, "wifi_pass_clear", val, sizeof(val)))
+        new_config.wifi_pass[0] = '\0';
+    else if (get_form_value(body, "wifi_pass", val, sizeof(val)) && val[0])
         strlcpy(new_config.wifi_pass, val, sizeof(new_config.wifi_pass));
     if (get_form_value(body, "mqtt_url", val, sizeof(val)))
         strlcpy(new_config.mqtt_url, val, sizeof(new_config.mqtt_url));
     if (get_form_value(body, "mqtt_user", val, sizeof(val)))
         strlcpy(new_config.mqtt_user, val, sizeof(new_config.mqtt_user));
-    if (get_form_value(body, "mqtt_pass", val, sizeof(val)))
+    if (get_form_value(body, "mqtt_pass_clear", val, sizeof(val)))
+        new_config.mqtt_pass[0] = '\0';
+    else if (get_form_value(body, "mqtt_pass", val, sizeof(val)) && val[0])
         strlcpy(new_config.mqtt_pass, val, sizeof(new_config.mqtt_pass));
     if (get_form_value(body, "interval", val, sizeof(val))) {
         int secs = atoi(val);
@@ -646,9 +683,10 @@ static esp_err_t save_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "Config saved to NVS, rebooting...");
 
-    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_sendstr_chunk(req,
         "<!DOCTYPE html><html><head>"
+        "<meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<style>");
     httpd_resp_sendstr_chunk(req, PAGE_STYLE);
@@ -752,8 +790,15 @@ esp_err_t http_server_start(app_config_t *config)
     httpd_config_t httpd_config = HTTPD_DEFAULT_CONFIG();
     httpd_config.stack_size = 8192;
     httpd_config.max_uri_handlers = 8;
-    httpd_config.recv_wait_timeout = 20;   /* seconds — tolerate slow OTA uploads */
-    httpd_config.send_wait_timeout = 20;
+    /* Generous socket timeouts, in seconds. A full OTA image is about 1MB and
+       the upload competes with the USB host and MQTT tasks, so throughput can
+       fall well below what a LAN transfer suggests. Anything tighter than this
+       aborts large uploads part way through. */
+    httpd_config.recv_wait_timeout = 300;
+    httpd_config.send_wait_timeout = 300;
+    /* One stalled socket must not be able to hold the only worker forever.
+       Purging the least-recently-used connection keeps the UI reachable. */
+    httpd_config.lru_purge_enable = true;
     /* Needed for the wildcard captive-portal catch-all below. */
     httpd_config.uri_match_fn = httpd_uri_match_wildcard;
 
