@@ -46,7 +46,9 @@ jobs:
           esp_idf_version: v5.3.4
           target: esp32s3
           path: '.'
-          command: idf.py build && idf.py merge-bin -o build/merged.bin
+          # merge-bin resolves -o relative to the build directory, which is
+          # already its working directory, so this lands at build/merged.bin.
+          command: idf.py build && idf.py merge-bin -o merged.bin
 
       - name: Assert the build picked up version.h
         run: |
