@@ -1,6 +1,9 @@
 #include "http_server.h"
 #include "apc_hid_parser.h"
 #include "hid_debug.h"
+#include "hid_pdc.h"
+#include "ups_map.h"
+#include "usb_host_manager.h"
 #include "usb_host_manager.h"
 #include "wifi_manager.h"
 #include "led_status.h"
@@ -569,6 +572,22 @@ static esp_err_t hid_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "text/plain");
     char line[256];
 
+    /* Identify whatever is plugged in, even when it is not a UPS. A device that
+     * enumerates as HID but declares no Power Device page is almost always a
+     * USB-to-serial bridge (Cypress 0665:5161 and friends) speaking Megatec/Q1
+     * ASCII, which nothing in this firmware can decode. Saying so here is what
+     * lets an unknown UPS be identified without a NUT box. */
+    uint16_t vid = 0, pid = 0;
+    bool is_power_device = false;
+    usb_ups_attached_ids(&vid, &pid, &is_power_device);
+
+    snprintf(line, sizeof(line),
+             "# ATTACHED DEVICE\nvid:pid       = %04X:%04X\npower device  = %s\n\n",
+             vid, pid,
+             is_power_device ? "yes (declares HID Usage Page 0x84)"
+                             : "no (not a HID Power Device Class UPS)");
+    httpd_resp_sendstr_chunk(req, line);
+
     size_t desc_len = 0;
     const uint8_t *desc = hid_debug_get_descriptor(&desc_len);
 
@@ -619,8 +638,86 @@ static esp_err_t hid_handler(httpd_req_t *req)
         httpd_resp_sendstr_chunk(req, "(no reports seen yet)\n");
     }
 
+    /* ── The descriptor, parsed ──────────────────────────────────────────
+     * Every field the device declares, with the bit position it declared.
+     * This is the ground truth the hand-written parser was guessing at. */
+    const hid_pdc_map_t *pdc = usb_ups_pdc_map();
+    if (pdc == NULL) {
+        httpd_resp_sendstr_chunk(req,
+            "\n# PARSED FIELDS\n(report descriptor not parsed; generic decode inactive)\n");
+    } else {
+        snprintf(line, sizeof(line),
+                 "\n# PARSED FIELDS (%d%s)\n"
+                 "#  id  type  bit  sz  exp  usage path -> mapped name\n",
+                 pdc->count, pdc->truncated ? ", TRUNCATED" : "");
+        httpd_resp_sendstr_chunk(req, line);
+
+        for (int i = 0; i < pdc->count; i++) {
+            const hid_pdc_field_t *f = &pdc->fields[i];
+            char path[128];
+            hid_pdc_format_path(f, path, sizeof(path));
+            const char *mapped = ups_map_field_name(f);
+
+            snprintf(line, sizeof(line), "  %02X  %-4s  %3u  %2u  %3d  %s%s%s\n",
+                     f->report_id,
+                     f->report_type == HID_PDC_FEATURE ? "FEAT" :
+                     f->report_type == HID_PDC_INPUT   ? "IN"   : "OUT",
+                     f->bit_offset, f->bit_size, f->unit_exponent,
+                     path,
+                     mapped ? " -> " : "",
+                     mapped ? mapped : "");
+            httpd_resp_sendstr_chunk(req, line);
+        }
+    }
+
     /* What the parser made of it, so a wrong bit shows up next to its cause. */
     const ups_metrics_t *m = apc_hid_get_metrics();
+
+    /* ── Shadow decode ───────────────────────────────────────────────────
+     * The descriptor-driven decode next to the hand-written one. MQTT still
+     * publishes the hand-written column; these two agreeing on a live board is
+     * the gate for switching that over. Any row marked DIFF is the whole
+     * reason this section exists. */
+    const ups_metrics_t *g = usb_ups_generic_metrics();
+    if (g == NULL) {
+        httpd_resp_sendstr_chunk(req, "\n# SHADOW DECODE\n(generic decode inactive)\n");
+    } else {
+        httpd_resp_sendstr_chunk(req,
+            "\n# SHADOW DECODE  (hand-written | descriptor-driven)\n"
+            "# MQTT publishes the hand-written column while shadow mode is on.\n");
+
+        struct { const char *name; float a; float b; float tol; } cmp[] = {
+            { "battery_charge",   m->battery_charge,   g->battery_charge,   0.5f },
+            { "battery_runtime",  m->battery_runtime,  g->battery_runtime,  1.0f },
+            { "battery_voltage",  m->battery_voltage,  g->battery_voltage,  0.05f },
+            { "input_voltage",    m->input_voltage,    g->input_voltage,    0.5f },
+            { "load_percent",     m->load_percent,     g->load_percent,     0.5f },
+            { "nominal_power",    m->nominal_power,    g->nominal_power,    0.5f },
+        };
+        for (unsigned i = 0; i < sizeof(cmp) / sizeof(cmp[0]); i++) {
+            float d = cmp[i].a - cmp[i].b;
+            if (d < 0) d = -d;
+            snprintf(line, sizeof(line), "  %-18s %10.2f | %10.2f  %s\n",
+                     cmp[i].name, (double)cmp[i].a, (double)cmp[i].b,
+                     (d <= cmp[i].tol) ? "ok" : "DIFF");
+            httpd_resp_sendstr_chunk(req, line);
+        }
+
+        struct { const char *name; bool a; bool b; } flags[] = {
+            { "online",          m->status.online,          g->status.online },
+            { "charging",        m->status.charging,        g->status.charging },
+            { "discharging",     m->status.discharging,     g->status.discharging },
+            { "low_battery",     m->status.low_battery,     g->status.low_battery },
+            { "overload",        m->status.overload,        g->status.overload },
+            { "replace_battery", m->status.replace_battery, g->status.replace_battery },
+        };
+        for (unsigned i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
+            snprintf(line, sizeof(line), "  %-18s %10d | %10d  %s\n",
+                     flags[i].name, flags[i].a ? 1 : 0, flags[i].b ? 1 : 0,
+                     (flags[i].a == flags[i].b) ? "ok" : "DIFF");
+            httpd_resp_sendstr_chunk(req, line);
+        }
+    }
 
     char ident[384];
     snprintf(ident, sizeof(ident),

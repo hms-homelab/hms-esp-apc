@@ -5,6 +5,6 @@
  * parsed by CMakeLists.txt for PROJECT_VER (the app descriptor OTA reads), and
  * checked against the pushed tag by .github/workflows/release.yml. Keep the line
  * below in this exact shape; those parsers match on it. */
-#define HMS_ESP_APC_VERSION "1.14.3"
+#define HMS_ESP_APC_VERSION "1.15.0"
 
 #endif // VERSION_H

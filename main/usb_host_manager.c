@@ -62,6 +62,8 @@
 
 #include "usb_host_manager.h"
 #include "apc_hid_parser.h"
+#include "hid_pdc.h"
+#include "ups_map.h"
 #include "hid_debug.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -75,7 +77,12 @@ static const char *TAG = "usb_host";
 //══════════════════════════════════════════════════════════════════════════════
 // USB DEVICE IDENTIFICATION
 //══════════════════════════════════════════════════════════════════════════════
-// APC UPS USB Vendor/Product IDs (identifies this specific UPS model)
+// A PID table cannot answer "is this a UPS". Whether a device speaks the HID
+// Power Device Class is stated in its own report descriptor (Usage Page 0x84),
+// so that is what we test, in the task loop once the descriptor has been read.
+// Any device exposing a HID interface gets that far.
+//
+// The APC IDs stay only as a fast path and as documentation of what shipped:
 // VID 0x051D = American Power Conversion
 // PID 0x0002 = Back-UPS series (Back-UPS XS 1000M, etc.)
 // PID 0x0003 = Smart-UPS series (Smart-UPS C 1500, etc.)
@@ -83,6 +90,10 @@ static const char *TAG = "usb_host";
 #define APC_PID_BACKUPS  0x0002
 #define APC_PID_SMARTUPS 0x0003
 #define IS_APC_UPS(vid, pid) ((vid) == APC_VID && ((pid) == APC_PID_BACKUPS || (pid) == APC_PID_SMARTUPS))
+
+// USB class code for HID. Interface class, not device class: UPSes report
+// class 0 at device level and 3 on the interface.
+#define USB_CLASS_HID 0x03
 
 //══════════════════════════════════════════════════════════════════════════════
 // USB HOST STATE TRACKING
@@ -99,6 +110,27 @@ static usb_device_handle_t ups_device = NULL;       // Handle to the UPS device
 static bool need_report_descriptor = false;
 
 //══════════════════════════════════════════════════════════════════════════════
+// GENERIC HID POWER DEVICE CLASS DECODE (shadow of apc_hid_parser)
+//══════════════════════════════════════════════════════════════════════════════
+// Parsed from the device's own report descriptor. While shadow mode is on this
+// runs alongside the hand-written parser and only feeds /hid; MQTT still
+// publishes apc_hid_parser's numbers until the two are shown to agree.
+static hid_pdc_map_t  pdc_map;
+static ups_metrics_t  generic_metrics;
+static bool           pdc_map_valid = false;
+
+// Feature report IDs derived from the descriptor, replacing the hardcoded
+// poll_reports[] list. Falls back to that list if the derivation comes up empty.
+static uint8_t derived_poll[32];
+static int     derived_poll_n = 0;
+
+// Identity of whatever is plugged in, kept even when it turns out not to be a
+// UPS, so /hid can identify unknown hardware without a NUT box.
+static uint16_t attached_vid = 0;
+static uint16_t attached_pid = 0;
+static bool     attached_is_power_device = false;
+
+//══════════════════════════════════════════════════════════════════════════════
 // HID (Human Interface Device) CONFIGURATION
 //══════════════════════════════════════════════════════════════════════════════
 // HID Interface: UPS uses interface 0 for all HID communication
@@ -107,6 +139,30 @@ static bool need_report_descriptor = false;
 // HID Interrupt Endpoint: 0x81 means IN endpoint 1 (device-to-host)
 // This is where the UPS automatically sends status updates
 #define HID_INTERRUPT_IN_EP 0x81
+
+/*
+ * Does this device expose a HID interface?
+ *
+ * This is the admission test that replaced the VID/PID gate, and it is
+ * deliberately permissive: it lets any HID device through so that its report
+ * descriptor can be read. The real question, "does it declare Usage Page 0x84",
+ * is answered in the task loop, where a control transfer is legal. Asking it
+ * here would deadlock, because waiting on a transfer pumps the very event loop
+ * this callback is running inside.
+ */
+static bool device_has_hid_interface(usb_device_handle_t dev_hdl)
+{
+    const usb_config_desc_t *config_desc;
+    if (usb_host_get_active_config_descriptor(dev_hdl, &config_desc) != ESP_OK) {
+        return false;
+    }
+
+    int offset = 0;
+    const usb_intf_desc_t *intf =
+        usb_parse_interface_descriptor(config_desc, HID_INTERFACE, 0, &offset);
+
+    return (intf != NULL && intf->bInterfaceClass == USB_CLASS_HID);
+}
 
 // USB Host client event handler
 static void usb_host_client_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg)
@@ -136,9 +192,17 @@ static void usb_host_client_event_cb(const usb_host_client_event_msg_t *event_ms
 
             ESP_LOGI(TAG, "DEBUG: Device VID:PID = %04X:%04X", dev_desc->idVendor, dev_desc->idProduct);
 
-            // Check if this is our APC UPS
-            if (IS_APC_UPS(dev_desc->idVendor, dev_desc->idProduct)) {
-                ESP_LOGI(TAG, "🔌 APC UPS found! VID:PID = %04X:%04X",
+            // Remember what is attached even if it turns out not to be a UPS,
+            // so /hid can identify unknown hardware.
+            attached_vid = dev_desc->idVendor;
+            attached_pid = dev_desc->idProduct;
+            attached_is_power_device = false;
+
+            // Admit any HID device. Whether it is a UPS is decided from its
+            // report descriptor in the task loop, not from this ID pair.
+            if (IS_APC_UPS(dev_desc->idVendor, dev_desc->idProduct) ||
+                device_has_hid_interface(dev_hdl)) {
+                ESP_LOGI(TAG, "🔌 HID device found, VID:PID = %04X:%04X (checking for Power Device page)",
                          dev_desc->idVendor, dev_desc->idProduct);
 
                 ups_device = dev_hdl;
@@ -180,8 +244,8 @@ static void usb_host_client_event_cb(const usb_host_client_event_msg_t *event_ms
                     }
                 }
             } else {
-                ESP_LOGI(TAG, "⚠️ Not an APC UPS (VID:PID = %04X:%04X), expected VID=%04X",
-                         dev_desc->idVendor, dev_desc->idProduct, APC_VID);
+                ESP_LOGI(TAG, "⚠️ Not a HID device (VID:PID = %04X:%04X), ignoring",
+                         dev_desc->idVendor, dev_desc->idProduct);
                 usb_host_device_close(usb_client, dev_hdl);
             }
             break;
@@ -192,7 +256,16 @@ static void usb_host_client_event_cb(const usb_host_client_event_msg_t *event_ms
                 ups_connected = false;
                 ups_device = NULL;
                 need_report_descriptor = false;
-                ESP_LOGI(TAG, "❌ APC UPS disconnected");
+
+                /* Drop the parsed descriptor with the device. Keeping it would
+                 * let a different UPS be decoded with the previous one's field
+                 * offsets, which is the exact failure this rewrite removes. */
+                pdc_map_valid = false;
+                derived_poll_n = 0;
+                attached_is_power_device = false;
+                memset(&generic_metrics, 0, sizeof(generic_metrics));
+
+                ESP_LOGI(TAG, "❌ UPS disconnected");
             }
             break;
 
@@ -821,6 +894,49 @@ esp_err_t usb_host_init(void)
     return ESP_OK;
 }
 
+//══════════════════════════════════════════════════════════════════════════════
+// GENERIC DECODE (shadow)
+//══════════════════════════════════════════════════════════════════════════════
+
+// Adapter so ups_map can resolve string indices without knowing about USB.
+static bool ups_string_fetch(uint8_t index, char *out, size_t out_size, void *ctx)
+{
+    (void)ctx;
+    return get_string_descriptor(index, out, out_size) == ESP_OK;
+}
+
+/*
+ * Decode one report through the descriptor-driven path, into a separate
+ * ups_metrics_t. Nothing published reads this yet: while shadow mode is on it
+ * exists so /hid can show both decodes side by side, and MQTT keeps using
+ * apc_hid_parser until the two are shown to agree on a live board.
+ */
+static void generic_decode(uint8_t report_id, const uint8_t *buf, size_t len, uint8_t type)
+{
+    if (!pdc_map_valid || buf == NULL || len < 2) return;
+
+    // buf[0] is the report ID; ups_map wants the payload after it.
+    ups_map_apply(&pdc_map, report_id, type, buf + 1, len - 1,
+                  &generic_metrics, ups_string_fetch, NULL);
+}
+
+const ups_metrics_t *usb_ups_generic_metrics(void)
+{
+    return pdc_map_valid ? &generic_metrics : NULL;
+}
+
+const hid_pdc_map_t *usb_ups_pdc_map(void)
+{
+    return pdc_map_valid ? &pdc_map : NULL;
+}
+
+void usb_ups_attached_ids(uint16_t *vid, uint16_t *pid, bool *is_power_device)
+{
+    if (vid) *vid = attached_vid;
+    if (pid) *pid = attached_pid;
+    if (is_power_device) *is_power_device = attached_is_power_device;
+}
+
 void usb_host_task(void *arg)
 {
     ESP_LOGI(TAG, "📡 USB Host task started");
@@ -926,8 +1042,48 @@ void usb_host_task(void *arg)
                 if (get_hid_report_descriptor(desc, sizeof(desc), &desc_len) == ESP_OK) {
                     ESP_LOGI(TAG, "📄 HID report descriptor: %d bytes", (int)desc_len);
                     hid_debug_set_descriptor(desc, desc_len);
+
+                    // The admission test proper: parse the descriptor and see
+                    // whether the device claims to be a power device at all.
+                    pdc_map_valid = hid_pdc_parse(desc, desc_len, &pdc_map);
+                    if (!pdc_map_valid) {
+                        ESP_LOGW(TAG, "📄 report descriptor did not parse; generic decode off");
+                    } else {
+                        ESP_LOGI(TAG, "📄 parsed %d fields, power page %s%s",
+                                 pdc_map.count,
+                                 pdc_map.has_power_page ? "YES" : "NO",
+                                 pdc_map.truncated ? " (TRUNCATED)" : "");
+                        attached_is_power_device = pdc_map.has_power_page;
+
+                        if (!ups_map_is_usable(&pdc_map)) {
+                            /* Not a UPS. Common case: a Cypress USB-to-serial
+                             * bridge (VID 0x0665), which enumerates as HID but
+                             * carries Megatec/Q1 ASCII rather than any Power
+                             * Device data. Nothing here can decode that, so let
+                             * it go rather than poll it forever. The VID/PID and
+                             * descriptor stay visible on /hid for identification. */
+                            ESP_LOGW(TAG, "🔌 %04X:%04X is a HID device but not a UPS "
+                                          "(no Power Device page); releasing",
+                                     attached_vid, attached_pid);
+                            usb_host_interface_release(usb_client, ups_device, HID_INTERFACE);
+                            usb_host_device_close(usb_client, ups_device);
+                            ups_device = NULL;
+                            ups_connected = false;
+                            derived_poll_n = 0;
+                            continue;
+                        }
+
+                        // Poll what this device actually offers, instead of a
+                        // list transcribed from one APC's NUT exploration.
+                        derived_poll_n = ups_map_feature_report_ids(
+                            &pdc_map, derived_poll, (int)sizeof(derived_poll));
+                        ESP_LOGI(TAG, "🔄 derived %d feature report IDs from the descriptor",
+                                 derived_poll_n);
+                    }
                 } else {
                     ESP_LOGW(TAG, "📄 HID report descriptor unavailable");
+                    pdc_map_valid = false;
+                    derived_poll_n = 0;
                 }
                 fetch_identity_strings();
             }
@@ -945,15 +1101,25 @@ void usb_host_task(void *arg)
 
                 // Parse the report
                 apc_hid_parse_report(report_id, report_buffer, report_len, NULL);
+                generic_decode(report_id, report_buffer, report_len, HID_PDC_INPUT);
             }
 
             // RE-ENABLED: Using correct Feature Report IDs from NUT exploration
             // Poll on first loop and then every 20 loops (~40 seconds)
             if (loop_count == 1 || loop_count % 20 == 0) {
-                ESP_LOGI(TAG, "🔄 Active polling cycle %d: Requesting %d reports...", poll_cycle++, num_poll_reports);
+                /* Prefer the list derived from this device's own descriptor.
+                 * The hardcoded APC list stays as a fallback for the case where
+                 * the descriptor could not be read or parsed, so a device that
+                 * worked before still works. */
+                const uint8_t *active_list = (derived_poll_n > 0) ? derived_poll : poll_reports;
+                int active_count = (derived_poll_n > 0) ? derived_poll_n : num_poll_reports;
 
-                for (int i = 0; i < num_poll_reports; i++) {
-                    uint8_t report_id = poll_reports[i];
+                ESP_LOGI(TAG, "🔄 Active polling cycle %d: Requesting %d reports (%s)...",
+                         poll_cycle++, active_count,
+                         (derived_poll_n > 0) ? "from descriptor" : "hardcoded fallback");
+
+                for (int i = 0; i < active_count; i++) {
+                    uint8_t report_id = active_list[i];
                     err = get_hid_report(report_id, report_buffer, sizeof(report_buffer), &report_len);
 
                     if (err == ESP_OK && report_len > 0) {
@@ -961,6 +1127,7 @@ void usb_host_task(void *arg)
 
                         // Parse the polled report
                         apc_hid_parse_report(report_id, report_buffer, report_len, NULL);
+                        generic_decode(report_id, report_buffer, report_len, HID_PDC_FEATURE);
                     }
 
                     // Small delay between polls to avoid overwhelming UPS

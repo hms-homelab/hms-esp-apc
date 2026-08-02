@@ -1,5 +1,61 @@
 # Changelog
 
+## v1.15.0
+
+Decode is now driven by the device's own HID report descriptor instead of bit
+positions reverse-engineered from one specific APC. **Shadow mode: MQTT still
+publishes the hand-written parser's numbers.** The new path runs alongside it and
+is visible on `/hid` for comparison; nothing published has changed yet.
+
+- **New `hid_pdc.c`, a HID report descriptor walker.** Parses the descriptor into
+  a field table of (report ID, usage path, bit offset, bit size, logical range,
+  unit exponent). Report IDs are assigned arbitrarily by each vendor's firmware,
+  so "report `0x16` is PresentStatus" was only ever true of the one APC it was
+  read off. No ESP-IDF dependencies, so it compiles natively for tests
+- **New `ups_map.c`, usage path to metrics.** Matches on (ancestor collection,
+  leaf usage), because `Voltage` (`0x84:0x30`) means battery voltage under
+  PowerSummary, mains under Input and output under Output. Equivalent to NUT's
+  hid2nut tables
+- Scaling now comes from the descriptor's declared unit exponent rather than the
+  magic `/100.0f` and `/10.0f` divisors scattered through `apc_hid_parser.c`
+- **Scaling also applies the Unit field's dimensional scale, which is not
+  optional.** HID's SI Linear system is centimetre-gram-second, so a volt in HID
+  units is `10^-7` V. The deployed Back-UPS XS 1000M declares Unit Exponent 5 on
+  its battery voltage and expects the reader to add `-7`; that is how raw 1371
+  becomes 13.71 V. Applying the exponent alone read it as 137100000 V. Caught by
+  replaying the real 1049-byte descriptor off a live board, which is precisely
+  what a hand-written test descriptor cannot expose, since writing one means
+  choosing the exponent yourself
+- Identity strings resolve through the string index the descriptor names, rather
+  than a hardcoded index table. Decoding that index as an enum is what once
+  reported `NiMH` on a lead-acid UPS
+- **The VID/PID gate is gone.** Admission is now "exposes a HID interface", and
+  the real test is whether the descriptor declares Usage Page `0x84` (Power
+  Device). Any UPS that implements the class correctly is decoded with no new
+  code, APC and Tripp Lite alike. A PID table never could answer that question
+- **`poll_reports[]` is no longer hardcoded.** The Feature report IDs to poll are
+  derived from what this device actually declares and this firmware actually
+  maps. The old list remains as a fallback if the descriptor cannot be read
+- `/hid` gains the parsed field table, a side-by-side of both decodes with `DIFF`
+  markers, and the attached VID:PID with whether it is a Power Device at all.
+  That last part identifies unknown hardware without needing a NUT box: a device
+  that enumerates as HID but declares no `0x84` page is usually a USB-to-serial
+  bridge speaking Megatec/Q1 ASCII, which this firmware cannot decode and now
+  releases instead of polling forever
+- `test/extract_hid.py` + `test/hid_replay.c` replay a captured `/hid` page (real
+  descriptor, real report bytes) through the new decode on the host. Validated
+  against a live Back-UPS XS 1000M: charge 98%, runtime 18763s, battery 13.71V,
+  nominal 12.00V, input 121V, 600W, transfer 88/139V, and all eight status flags
+  match what that same board's hand-written parser reported
+- Host test harness in `test/hid_pdc_test.c`, 107 assertions, no board required:
+  `cc -Wall -Wextra -I../main -o /tmp/t hid_pdc_test.c ../main/hid_pdc.c ../main/ups_map.c`
+  Covers the exact PresentStatus bit order v1.14.1 arrived at by hand, plus what
+  hand-decoding never had to handle: sign extension, constant padding that must
+  advance the bit cursor without being stored, per-report cursor isolation, and
+  Push/Pop. Includes 199 truncations and 3168 byte mutations of the descriptor,
+  clean under `-fsanitize=address,undefined` (a malformed descriptor must not
+  crash a board whose USB port is the UPS link and therefore has no console)
+
 ## v1.14.3
 
 - **Fix OTA rebooting the device mid-upload.** `esp_ota_begin()` was called with

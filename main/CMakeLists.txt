@@ -4,6 +4,8 @@ idf_component_register(
         "wifi_manager.c"
         "mqtt_manager.c"
         "apc_hid_parser.c"
+        "hid_pdc.c"
+        "ups_map.c"
         "usb_host_manager.c"
         "hid_debug.c"
         "http_server.c"
