@@ -21,7 +21,9 @@ The status page shows live metrics next to the HID decode as it happens, which i
 ![The live status page, showing metrics and the HID decode log](docs/images/status-page.png)
 
 
-This firmware decodes the APC HID report descriptor **on the microcontroller**. `apc_hid_parser.c` walks the report, resolves usage pages to real units, and produces finished values: battery runtime in seconds, load as a percentage, the reason for the last transfer to battery. What leaves the chip is already Home Assistant entities.
+This firmware decodes the HID report descriptor **on the microcontroller**. At enumeration it reads the descriptor the UPS itself provides, builds a table of every field with its report ID, bit offset, bit size and unit exponent, and drives decoding from HID usage paths. It resolves usages to real units and produces finished values: battery runtime in seconds, load as a percentage, the reason for the last transfer to battery. What leaves the chip is already Home Assistant entities.
+
+Because the layout comes from the device rather than from hardcoded offsets, **any UPS that implements the HID Power Device Class correctly is decoded without new code**. There is no vendor ID table to extend. A board admits any HID device, then keeps it only if its descriptor declares Usage Page `0x84`.
 
 The practical result: no server to keep running, no daemon to configure, no parsing layer to maintain. The microcontroller is the entire stack.
 
@@ -41,7 +43,9 @@ The two are independent. Use this firmware alone for a Home Assistant setup, add
 
 ## Features
 
-- USB HID host communication with APC UPS, with the report parsed on-device
+- USB HID host communication with the UPS, with the report descriptor parsed on-device
+- **Vendor independent**: decoding is driven by the device's own descriptor, so any conformant HID Power Device Class UPS works without a code change
+- **Raw HID capture at `/hid`**: descriptor, live reports and the decoded field table, which also identifies UPS models this firmware has never seen
 - 30+ Home Assistant entities via MQTT auto-discovery, no YAML required
 - **SoftAP captive portal** for setup: no credentials compiled into the firmware
 - **Web config UI** for WiFi, MQTT, publish interval, and device naming, persisted to NVS
@@ -64,8 +68,10 @@ Settings are stored in NVS, so they survive reflashing. The portal returns autom
 ## Supported hardware
 
 - **Microcontroller**: ESP32-S3 with USB OTG (M5Stack AtomS3, ESP32-S3-DevKitC, and similar). 4MB flash minimum, required by the A/B OTA layout.
-- **UPS**: APC UPS, USB VID `051D`, PID `0002` (Back-UPS) or `0003` (Smart-UPS). Tested with Back-UPS XS 1000M and Smart-UPS C 1500.
+- **UPS**: any UPS implementing the **HID Power Device Class** (USB Usage Page `0x84`). There is no vendor or product ID list: a board reads the descriptor and keeps the device if it declares that page. Tested on APC Back-UPS XS 1000M (`051D:0002`) and Smart-UPS C 1500 (`051D:0003`).
 - **USB connection**: USB OTG on GPIO19 (D-) and GPIO20 (D+).
+
+> Not every UPS with a USB port qualifies. Many budget units expose a USB-to-serial bridge (Cypress `0665:5161` is the common one) that enumerates as HID but carries Megatec/Q1 ASCII rather than any Power Device data. Those cannot be decoded by this firmware. [Reading the raw HID](#reading-the-raw-hid) tells you which kind you have in about ten seconds.
 
 ### Wiring
 
@@ -212,6 +218,56 @@ Sensors appear automatically under a device named **APC UPS (MAC)**, or your cho
 | Driver State | `running` |
 | Power Failure | `OK`, or the failure reason |
 
+## Reading the raw HID
+
+Every board publishes what it sees on the USB bus at `/hid`, as plain text so it can be curl'd, saved and diffed:
+
+```bash
+curl http://<device-ip>/hid
+```
+
+| Section | What it gives you |
+|---------|-------------------|
+| **Attached device** | VID:PID, and whether the device declares HID Usage Page `0x84` |
+| **HID report descriptor** | The raw descriptor, hex dumped. The device's own definition of every report |
+| **Raw reports** | The last payload seen per report ID, with source (interrupt or feature), age, and a changed flag |
+| **Parsed fields** | Every field the descriptor declares: report ID, bit offset, bit size, unit exponent, usage path, and the metric it maps to |
+| **Decoded** | The finished values and status flags |
+
+This is the first thing to reach for when a reading looks wrong. A bad value and a bad bit position look identical from Home Assistant, and this page separates them: the descriptor says where a field really lives, the raw bytes say what actually arrived.
+
+### Identifying a UPS this firmware has never seen
+
+Plug any UPS into a board and read `/hid`. It does not have to work first, and you need neither NUT nor a PC in the loop.
+
+- **`power device = yes (declares HID Usage Page 0x84)`** means it implements the class and should decode with no code change. The parsed field table shows exactly which metrics it exposes.
+- **`power device = no`** means it enumerated as HID but carries no Power Device data. Almost always a USB-to-serial bridge speaking Megatec/Q1. The board releases it rather than polling it forever, and says so in the log.
+- **`(nothing attached to the USB host port)`** means nothing enumerated at all: check the cable and the VBUS wiring above.
+
+In every case the VID:PID and the raw descriptor stay on the page, which is enough to identify the device and decide what supporting it would take. That works for a UPS from any vendor, including ones that turn out not to be supportable.
+
+### Replaying a capture on a PC
+
+A saved `/hid` page can be pushed back through the same decoder on a host machine, with no board involved:
+
+```bash
+curl http://<device-ip>/hid > capture.txt
+
+cd test
+python3 extract_hid.py ../capture.txt cap/
+cc -Wall -Wextra -I../main -o /tmp/replay hid_replay.c ../main/hid_pdc.c ../main/ups_map.c
+/tmp/replay cap/descriptor.bin cap/reports.txt
+```
+
+That prints the parsed field table and the decoded metrics for the captured device, which is how a new model gets verified before any firmware change is flashed. A capture keeps working after the UPS is unplugged, so a model can be supported without keeping the hardware on hand.
+
+The decoder's own test suite runs the same way, no board required:
+
+```bash
+cd test
+cc -Wall -Wextra -I../main -o /tmp/t hid_pdc_test.c ../main/hid_pdc.c ../main/ups_map.c && /tmp/t
+```
+
 ## Architecture
 
 FreeRTOS tasks:
@@ -240,15 +296,21 @@ boot
 ### Data flow
 
 ```
-APC UPS (USB device)
+UPS (USB device)
   |
+  | at enumeration: HID report descriptor
+  v
+hid_pdc  (walks the descriptor)   -->  field table: report id, usage path,
+  |                                    bit offset, bit size, unit exponent
   | USB HID reports (interrupt + feature)
   v
-USB host manager --> APC HID parser --> ups_metrics_t (shared struct)
+USB host manager --> ups_map (usage path -> metric) --> ups_metrics_t
                                               |
                                               v
                                     MQTT publish task --> broker --> Home Assistant
 ```
+
+The feature reports polled are derived from the descriptor too, so a board asks each UPS only for what that UPS actually offers.
 
 ## Known hardware limitations
 
