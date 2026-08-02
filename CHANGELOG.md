@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.15.1
+
+- **`/hid` reported a stale VID:PID after the UPS was unplugged.** `DEV_GONE`
+  cleared `attached_is_power_device` but not the IDs, so the page showed the
+  departed device's `051D:0002` next to `power device = no`. That reads as "the
+  attached device is not a UPS" when it means "nothing is attached", and it sent
+  a debugging session chasing a regression that did not exist. Now clears both
+  and prints `(nothing attached to the USB host port)`
+- Shadow decode validated live on hardware for the first time, against a
+  Back-UPS XS 1000M (serial 0B2222N10328): all 12 compared rows agree, zero
+  DIFF. `battery_charge` 100%, `battery_runtime` 2224s, `battery_voltage`
+  13.71V, `input_voltage` 119V, `load_percent` 16%, `nominal_power` 600W, and
+  all six status flags. This is a second physical unit from the one whose
+  descriptor was captured for the replay tests, and it parses to the same 105
+  fields
+
 ## v1.15.0
 
 Decode is now driven by the device's own HID report descriptor instead of bit

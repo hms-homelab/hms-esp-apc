@@ -581,11 +581,19 @@ static esp_err_t hid_handler(httpd_req_t *req)
     bool is_power_device = false;
     usb_ups_attached_ids(&vid, &pid, &is_power_device);
 
-    snprintf(line, sizeof(line),
-             "# ATTACHED DEVICE\nvid:pid       = %04X:%04X\npower device  = %s\n\n",
-             vid, pid,
-             is_power_device ? "yes (declares HID Usage Page 0x84)"
-                             : "no (not a HID Power Device Class UPS)");
+    if (vid == 0 && pid == 0) {
+        /* Nothing plugged in is a different statement from "the thing plugged
+         * in is not a UPS", and conflating them sent us chasing a phantom
+         * regression once already. */
+        snprintf(line, sizeof(line),
+                 "# ATTACHED DEVICE\n(nothing attached to the USB host port)\n\n");
+    } else {
+        snprintf(line, sizeof(line),
+                 "# ATTACHED DEVICE\nvid:pid       = %04X:%04X\npower device  = %s\n\n",
+                 vid, pid,
+                 is_power_device ? "yes (declares HID Usage Page 0x84)"
+                                 : "no (not a HID Power Device Class UPS)");
+    }
     httpd_resp_sendstr_chunk(req, line);
 
     size_t desc_len = 0;

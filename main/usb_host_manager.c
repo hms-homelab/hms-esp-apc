@@ -265,6 +265,13 @@ static void usb_host_client_event_cb(const usb_host_client_event_msg_t *event_ms
                 attached_is_power_device = false;
                 memset(&generic_metrics, 0, sizeof(generic_metrics));
 
+                /* Clear the IDs too. Leaving them set made /hid report a stale
+                 * VID:PID next to "power device = no", which reads as "that
+                 * device is not a UPS" when it actually means nothing is
+                 * plugged in. */
+                attached_vid = 0;
+                attached_pid = 0;
+
                 ESP_LOGI(TAG, "❌ UPS disconnected");
             }
             break;
