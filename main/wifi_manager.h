@@ -2,6 +2,8 @@
 #define WIFI_MANAGER_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include "esp_err.h"
 
 /* Max STA association attempts before we give up and fall back to the portal. */
@@ -35,6 +37,17 @@ void wifi_power_save_boost(bool on);
 bool        wifi_is_connected(void);
 bool        wifi_portal_active(void);
 const char *wifi_portal_ssid(void);
+
+/* Nearby networks as a JSON array of SSID strings, strongest first, one entry per
+ * name: ["home","home-guest","neighbour"]. Never NULL; "[]" if the scan found
+ * nothing or could not run.
+ *
+ * The list is captured ONCE by wifi_start_portal(), before the SoftAP begins
+ * serving, and this only hands back that cached string. Scanning on demand while
+ * the portal is up is the thing to avoid: the radio is shared, so a live scan
+ * pulls the AP off its channel for seconds and drops the very client that asked
+ * for it. Scan first, serve second. */
+const char *wifi_scan_json(void);
 
 /* Kept for source compatibility: init + connect in one call. */
 esp_err_t wifi_init_sta(const char *ssid, const char *password);

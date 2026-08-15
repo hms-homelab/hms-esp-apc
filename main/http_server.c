@@ -284,27 +284,21 @@ static esp_err_t root_handler(httpd_req_t *req)
 
     httpd_resp_sendstr_chunk(req, "<form method='POST' action='/save'>");
 
-    /* Device Identity */
-    char idbuf[768];
-    snprintf(idbuf, sizeof(idbuf),
-        "<div class='card'><h2>Device Identity</h2>"
-        "<label>Friendly Name</label>"
-        "<input name='device_name' maxlength='63' placeholder='APC UPS (MAC)' value='%s'>"
-        "<label>Device ID slug</label>"
-        "<input name='device_slug' maxlength='23' placeholder='(MAC-derived)' value='%s'>"
-        "<small style='color:#8080a0'>MQTT id becomes "
-        "<b>apc_ups_&lt;slug&gt;</b>. Leave blank to use the MAC address. "
-        "a-z 0-9 _ - only. Changing this makes a new Home Assistant device.</small>"
-        "</div>",
-        name_esc, slug_esc);
-    httpd_resp_sendstr_chunk(req, idbuf);
+    /* WiFi goes first: on a fresh board this is the only card that matters, and
+       on the phone-sized portal anything below it needs scrolling to reach.
 
-    /* WiFi. Stored passwords are never sent back to the browser: this page is
+       Stored passwords are never sent back to the browser: this page is
        unauthenticated, so anything rendered here is readable by anyone on the
        LAN. A blank field on save means "keep the stored one" (see save_handler). */
-    snprintf(buf, sizeof(buf),
+    char wifibuf[1024];   /* its own buffer: the scan controls put this card well
+                             past the 512 the other cards share */
+    snprintf(wifibuf, sizeof(wifibuf),
         "<div class='card'><h2>WiFi</h2>"
-        "<label>SSID</label><input name='wifi_ssid' value='%s'>"
+        "<label>Network</label>"
+        "<select id='ssid_sel'><option value=''>Scanning...</option></select>"
+        "<input type='text' id='ssid_manual' placeholder='Network name' "
+            "style='display:none' autocapitalize='off' autocorrect='off'>"
+        "<input type='hidden' name='wifi_ssid' id='ssid_hidden' value='%s'>"
         "<label>Password</label>"
         "<input name='wifi_pass' type='password' placeholder='%s' autocomplete='new-password'>"
         "<label style='font-weight:normal'>"
@@ -313,7 +307,43 @@ static esp_err_t root_handler(httpd_req_t *req)
         "</div>",
         ssid_esc,
         current_config->wifi_pass[0] ? "unchanged, type to replace" : "(none set)");
-    httpd_resp_sendstr_chunk(req, buf);
+    httpd_resp_sendstr_chunk(req, wifibuf);
+
+    /* The list arrives on page load — /scan is a cached read, so there is nothing
+       to wait for and nothing for the user to press. The strongest network is
+       first out of the driver and so ends up preselected, unless this board
+       already has a saved SSID that is in range, which wins instead: otherwise
+       simply opening this page and saving would move a configured board onto
+       whichever neighbour happens to be loudest.
+
+       Options are built with createElement + textContent, never innerHTML — an
+       SSID is whatever a stranger nearby chose to broadcast. */
+    httpd_resp_sendstr_chunk(req,
+        "<script>"
+        "var sel=document.getElementById('ssid_sel'),"
+        "man=document.getElementById('ssid_manual'),"
+        "hid=document.getElementById('ssid_hidden');"
+        "function showManual(v){man.style.display='block';if(v)man.value=v;}"
+        "sel.onchange=function(){"
+        "if(this.value==='__other__')showManual('');"
+        "else{man.style.display='none';man.value='';}};"
+        "document.forms[0].addEventListener('submit',function(){"
+        "hid.value=(sel.value==='__other__')?man.value:sel.value;});"
+        "fetch('/scan').then(function(r){return r.json();}).then(function(d){"
+        "sel.innerHTML='';"
+        "d.forEach(function(n){"
+        "var o=document.createElement('option');o.value=n;o.textContent=n;sel.appendChild(o);});"
+        "var oo=document.createElement('option');"
+        "oo.value='__other__';oo.textContent='Other network...';sel.appendChild(oo);"
+        "if(!d.length){sel.value='__other__';showManual(hid.value);return;}"
+        "sel.selectedIndex=0;"
+        "if(hid.value&&d.indexOf(hid.value)>=0)sel.value=hid.value;"
+        "else if(hid.value){sel.value='__other__';showManual(hid.value);}"
+        "}).catch(function(){sel.innerHTML='';"
+        "var oo=document.createElement('option');"
+        "oo.value='__other__';oo.textContent='Other network...';sel.appendChild(oo);"
+        "sel.value='__other__';showManual(hid.value);});"
+        "</script>");
 
     /* MQTT */
     httpd_resp_sendstr_chunk(req, "<div class='card'><h2>MQTT</h2>");
@@ -332,6 +362,22 @@ static esp_err_t root_handler(httpd_req_t *req)
         current_config->mqtt_pass[0] ? "unchanged, type to replace" : "(none set)");
     httpd_resp_sendstr_chunk(req, buf);
     httpd_resp_sendstr_chunk(req, "</div>");
+
+    /* Device Identity. Below WiFi and MQTT because both defaults are derived from
+       the MAC and work untouched — this is the card you only visit on purpose. */
+    char idbuf[768];
+    snprintf(idbuf, sizeof(idbuf),
+        "<div class='card'><h2>Device Identity</h2>"
+        "<label>Friendly Name</label>"
+        "<input name='device_name' maxlength='63' placeholder='APC UPS (MAC)' value='%s'>"
+        "<label>Device ID slug</label>"
+        "<input name='device_slug' maxlength='23' placeholder='(MAC-derived)' value='%s'>"
+        "<small style='color:#8080a0'>MQTT id becomes "
+        "<b>apc_ups_&lt;slug&gt;</b>. Leave blank to use the MAC address. "
+        "a-z 0-9 _ - only. Changing this makes a new Home Assistant device.</small>"
+        "</div>",
+        name_esc, slug_esc);
+    httpd_resp_sendstr_chunk(req, idbuf);
 
     /* Interval */
     snprintf(buf, sizeof(buf),
@@ -369,6 +415,17 @@ static esp_err_t root_handler(httpd_req_t *req)
     httpd_resp_sendstr_chunk(req, "</body></html>");
     httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
+}
+
+/* ═══════════════ GET /scan — nearby networks, JSON ═══════════════ */
+
+/* Hands back the list captured before the AP came up. No scanning happens here:
+   doing it on request would pull the shared radio off the AP channel and drop
+   the client waiting on the response. */
+static esp_err_t scan_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, wifi_scan_json(), HTTPD_RESP_USE_STRLEN);
 }
 
 /* ═══════════════ POST /ota — Firmware Update (esp_ota) ═══════════════ */
@@ -918,7 +975,10 @@ esp_err_t http_server_start(app_config_t *config)
 
     httpd_config_t httpd_config = HTTPD_DEFAULT_CONFIG();
     httpd_config.stack_size = 8192;
-    httpd_config.max_uri_handlers = 8;
+    /* Seven real routes plus the portal-mode catch-all. Leave headroom: exceeding
+       this makes httpd_register_uri_handler() fail at start-up, and the only
+       symptom is one route quietly 404ing. */
+    httpd_config.max_uri_handlers = 12;
     /* Generous socket timeouts, in seconds. A full OTA image is about 1MB and
        the upload competes with the USB host and MQTT tasks, so throughput can
        fall well below what a LAN transfer suggests. Anything tighter than this
@@ -943,6 +1003,7 @@ esp_err_t http_server_start(app_config_t *config)
     const httpd_uri_t ota_uri    = { .uri = "/ota",     .method = HTTP_POST, .handler = ota_post_handler };
     const httpd_uri_t led_uri    = { .uri = "/led",     .method = HTTP_GET,  .handler = led_probe_handler };
     const httpd_uri_t hid_uri    = { .uri = "/hid",     .method = HTTP_GET,  .handler = hid_handler      };
+    const httpd_uri_t scan_uri   = { .uri = "/scan",    .method = HTTP_GET,  .handler = scan_handler     };
 
     httpd_register_uri_handler(server, &root_uri);
     httpd_register_uri_handler(server, &status_uri);
@@ -950,6 +1011,7 @@ esp_err_t http_server_start(app_config_t *config)
     httpd_register_uri_handler(server, &save_uri);
     httpd_register_uri_handler(server, &ota_uri);
     httpd_register_uri_handler(server, &led_uri);
+    httpd_register_uri_handler(server, &scan_uri);
 
     /* Captive-portal catch-all, registered LAST so the real routes win, and only
      * in portal mode — in STA mode a stray URL must 404, not bounce to 192.168.4.1.

@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.16.0
+
+- **The config portal picks the network from a list.** The SSID was a free-text
+  box, so onboarding meant typing a network name by hand on a phone, exactly,
+  from memory. It is now a dropdown that fills itself when the page loads, with
+  the strongest network already selected. An **Other network...** entry reveals a
+  text box, because a hidden network still has to be typed
+- The scan runs **once, in STA-only mode, before the SoftAP starts serving**, and
+  the result is cached. There is one radio: scanning after the access point is up
+  drags it off its channel for seconds, so the AP appears slowly and drops the
+  client that triggered the scan. `GET /scan` is a read of that cache and returns
+  immediately
+- A saved SSID that is in range wins over the strongest one. Without that, simply
+  opening the page and pressing Save would move an already-configured board onto
+  whichever neighbouring network happened to be loudest
+- **The portal is ordered WiFi, MQTT, then everything else.** WiFi first because
+  on a fresh board it is the only card that matters and the rest needed
+  scrolling past on a phone; Device Identity moved below both, as its defaults
+  are MAC-derived and work untouched
+- Raised `max_uri_handlers` from 8 to 12. Seven routes plus the portal catch-all
+  had it sitting exactly on the limit, where one more route would have failed to
+  register at start-up and simply 404'd with nothing in the log to say why
+
 ## v1.15.1
 
 - **`/hid` reported a stale VID:PID after the UPS was unplugged.** `DEV_GONE`

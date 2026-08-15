@@ -8,10 +8,12 @@
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "lwip/ip_addr.h"
 #include "lwip/inet.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static const char *TAG = "wifi_manager";
 
@@ -25,6 +27,10 @@ static char  s_portal_ssid[32]  = {0};
 static int   s_retry_num        = 0;
 static bool  s_portal_active    = false;
 static bool  s_initialized      = false;
+
+/* Defined below, next to the scan cache it fills. Called by wifi_start_portal()
+ * while still in STA-only mode, before the AP is brought up. */
+static void do_scan_and_cache(void);
 
 static void event_handler(void* arg, esp_event_base_t event_base,
                          int32_t event_id, void* event_data)
@@ -178,11 +184,20 @@ esp_err_t wifi_start_portal(void)
     ap_config.ap.max_connection = 4;
     ap_config.ap.authmode       = WIFI_AUTH_OPEN;   /* provisioning portal */
 
-    /* APSTA rather than AP: the STA netif stays up so a network that comes back
-     * on its own is still usable without a power cycle. */
+    /* Phase 1: scan the neighbourhood in STA-only mode and cache the list BEFORE
+     * the SoftAP serves. There is one radio: scanning once the AP is up drags it
+     * off the AP channel for seconds, so the AP is slow to appear and drops the
+     * client that triggered the scan. Scan first, save the list, then bring the
+     * AP up — by which point it is stable and no more scanning happens. */
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    do_scan_and_cache();
+
+    /* Phase 2: the AP, now that the list is cached. APSTA rather than AP so the
+     * STA netif stays up and a network that comes back on its own is still
+     * usable without a power cycle. */
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
 
     s_portal_active = true;
 
@@ -229,6 +244,104 @@ bool wifi_is_connected(void)
 bool wifi_portal_active(void)
 {
     return s_portal_active;
+}
+
+/* ═══════════════ Cached network scan ═══════════════ */
+
+/* Filled once by wifi_start_portal() before the AP serves, then only read. */
+static char s_scan_json[1024] = "[]";
+
+/* Cap on what we pull out of the driver. A dense 2.4GHz neighbourhood sees well
+ * past this and the extra records are the weakest ones, useless in a picker. */
+#define SCAN_MAX_RECORDS 32
+
+/* Escape for a JSON string literal. An SSID is whatever a stranger nearby chose
+ * to broadcast, so a quote or a backslash in one would otherwise break the whole
+ * document and leave the portal with an empty picker. */
+static void scan_json_escape(char *dst, const char *src, size_t dst_size)
+{
+    size_t di = 0;
+    while (*src && di + 7 < dst_size) {
+        unsigned char c = (unsigned char)*src++;
+        switch (c) {
+            case '"':  dst[di++] = '\\'; dst[di++] = '"';  break;
+            case '\\': dst[di++] = '\\'; dst[di++] = '\\'; break;
+            default:
+                if (c < 0x20) di += snprintf(dst + di, dst_size - di, "\\u%04x", c);
+                else          dst[di++] = (char)c;
+        }
+    }
+    dst[di] = '\0';
+}
+
+static void do_scan_and_cache(void)
+{
+    wifi_scan_config_t scan_cfg = { .show_hidden = false };
+
+    esp_err_t err = esp_wifi_scan_start(&scan_cfg, true);   /* blocking */
+    if (err != ESP_OK) {
+        /* Leaves the cache at "[]"; the portal falls back to manual entry. */
+        ESP_LOGW(TAG, "WiFi scan failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    uint16_t num = 0;
+    esp_wifi_scan_get_ap_num(&num);
+    if (num > SCAN_MAX_RECORDS) num = SCAN_MAX_RECORDS;
+    if (num == 0) {
+        ESP_LOGW(TAG, "WiFi scan found nothing");
+        return;
+    }
+
+    wifi_ap_record_t *aps = calloc(num, sizeof(wifi_ap_record_t));
+    if (!aps) {
+        /* The driver holds the result list until it is read or cleared; skipping
+         * both leaks it until the next scan. */
+        esp_wifi_clear_ap_list();
+        return;
+    }
+    if (esp_wifi_scan_get_ap_records(&num, aps) != ESP_OK) {
+        free(aps);
+        return;
+    }
+
+    /* The driver already returns these strongest-first, which is what puts the
+     * best network at the top of the list and therefore preselected. Duplicates
+     * are dropped as they are met, so a mesh or an extender broadcasting one name
+     * from several BSSIDs appears once, at its strongest. */
+    size_t pos = 1, kept = 0;
+    s_scan_json[0] = '[';
+    for (uint16_t i = 0; i < num; i++) {
+        const char *ssid = (const char *)aps[i].ssid;
+        if (ssid[0] == '\0') continue;              /* hidden, nothing to show */
+
+        char esc[132];                              /* 32 chars * 6 for \u00XX */
+        scan_json_escape(esc, ssid, sizeof(esc));
+
+        /* strstr on the accumulated text is enough to spot a repeat: every entry
+         * already in the buffer is wrapped in the same quotes. */
+        char probe[136];
+        snprintf(probe, sizeof(probe), "\"%s\"", esc);
+        if (kept && strstr(s_scan_json, probe)) continue;
+
+        size_t need = strlen(probe) + 2;            /* comma + closing bracket */
+        if (pos + need >= sizeof(s_scan_json)) break;
+
+        if (kept) s_scan_json[pos++] = ',';
+        pos += snprintf(s_scan_json + pos, sizeof(s_scan_json) - pos, "%s", probe);
+        kept++;
+    }
+    s_scan_json[pos++] = ']';
+    s_scan_json[pos] = '\0';
+    free(aps);
+
+    ESP_LOGI(TAG, "📡 WiFi scan cached: %u networks (%u unique)",
+             (unsigned)num, (unsigned)kept);
+}
+
+const char *wifi_scan_json(void)
+{
+    return s_scan_json;
 }
 
 const char *wifi_portal_ssid(void)
