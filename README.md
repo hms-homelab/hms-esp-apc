@@ -140,6 +140,29 @@ idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.local.defaults" build
 
 ## Build and flash
 
+### On a Mac, with nothing installed
+
+Double-click `scripts/flash-mac.command`, or run it from a terminal:
+
+```bash
+bash scripts/flash-mac.command
+```
+
+It installs everything the build needs, builds the firmware, finds the board on
+USB and flashes it, then tells you how to get it onto WiFi. The first run
+downloads about 2GB and takes 15-30 minutes; after that it takes a minute. It is
+safe to run again — every step checks whether it already did its work.
+
+The board has two USB-C ports. **Flash through the one labelled UART or COM**;
+the other is wired to the chip itself and the firmware claims it for the UPS.
+Plug the UPS into that one afterwards.
+
+This script targets the ESP32-S3 **N8R8** board profile
+(`sdkconfig.n8r8.defaults`), which differs from the repository default only in
+which pin drives the status LED. For any other board, build by hand below.
+
+### By hand
+
 Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/) v5.3 or later, an MQTT broker, and Home Assistant with the MQTT integration enabled.
 
 ```bash

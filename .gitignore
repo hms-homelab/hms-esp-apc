@@ -1,4 +1,5 @@
 build/
+build-n8r8/
 sdkconfig
 sdkconfig.old
 *.o

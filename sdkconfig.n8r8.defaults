@@ -1,0 +1,24 @@
+# Board profile: ESP32-S3-DevKitC-1 clone with an ESP32-S3-WROOM-1 N8R8 module
+# (8MB flash, 8MB octal PSRAM). Sold as a dual-USB-C board; the one tested was
+# Amazon ASIN B0D93FFTPD.
+#
+# Layer this ON TOP of sdkconfig.defaults, never instead of it:
+#   idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.n8r8.defaults" build
+#
+# scripts/flash-mac.command does this for you.
+#
+# The only thing that differs from the repo default is the status LED pin.
+# sdkconfig.defaults targets the ESP32-S3-Zero, whose WS2812 is on GPIO21.
+# DevKitC-1 boards put theirs on GPIO48 (v1.0 layout) or GPIO38 (v1.1); this
+# clone is the GPIO48 one, confirmed on hardware. Getting it wrong is silent —
+# the LED driver binds without error and simply lights nothing.
+CONFIG_STATUS_LED_ENABLED=y
+CONFIG_STATUS_LED_WS2812=y
+CONFIG_STATUS_LED_GPIO=48
+
+# Deliberately NOT set here: flash size and PSRAM. sdkconfig.defaults builds a
+# 4MB image and the partition table ends at 0x3E0000, which fits an 8MB board
+# with room to spare, and nothing in this firmware wants PSRAM. The boot log
+# says so every time and it is harmless:
+#   Detected size(8192k) larger than the size in the binary image
+#   header(4096k). Using the size in the binary image header.
