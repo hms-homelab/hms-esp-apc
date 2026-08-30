@@ -449,17 +449,26 @@ static esp_err_t ota_post_handler_inner(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Pass the real image size, NOT OTA_SIZE_UNKNOWN. With OTA_SIZE_UNKNOWN
-       esp_ota_begin() erases the WHOLE partition, and ota_0 is 0x1E0000
-       (1.875MB). Erasing more than ~1280K takes over 5s, which trips the
-       default 5s task watchdog and reboots the device mid-upload
-       (espressif/esp-idf#578). The client does not notice immediately because
-       it keeps filling TCP buffers while the device is blocked in the erase,
-       so the upload appears to die around 130KB after ~20s rather than at
-       byte zero. With the true size, only the sectors actually needed are
-       erased. */
+    /* OTA_WITH_SEQUENTIAL_WRITES, not the image size and definitely not
+       OTA_SIZE_UNKNOWN. Both of those erase up front — the whole 0x1E0000
+       partition for OTA_SIZE_UNKNOWN, or the image's worth for a real size —
+       and the httpd worker sits in that erase consuming nothing off the socket.
+       The client does not see a stall, it sees a connection that accepts a
+       buffer's worth and then dies, which is why this looked like "the upload
+       stops at ~138KB" from the far end on every board and every attempt.
+
+       Passing the true size was supposed to fix that (v1.14.3) by erasing less.
+       It only shrank the window: at ~1046KB the app had grown enough for the
+       up-front erase to kill the transfer again, and every board in the fleet
+       failed identically on v1.16.0.
+
+       Sequential mode erases each sector immediately before it is written, so
+       there is no long blocking erase anywhere — the cost is spread across the
+       whole upload, a sector at a time, between recv calls. It requires writes
+       to arrive in one continuous forward sequence, which is exactly what the
+       loop below does. */
     esp_ota_handle_t ota = 0;
-    esp_err_t err = esp_ota_begin(update, (size_t)req->content_len, &ota);
+    esp_err_t err = esp_ota_begin(update, OTA_WITH_SEQUENTIAL_WRITES, &ota);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "OTA: esp_ota_begin failed: %s", esp_err_to_name(err));
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_begin failed");
@@ -473,24 +482,43 @@ static esp_err_t ota_post_handler_inner(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    int remaining = req->content_len;
+    /* Progress every 128KB. Without it a failed OTA left nothing behind: the log
+       ring is 80 lines and the HID chatter overwrites it within ~10s, so by the
+       time anyone fetched /status the whole attempt was gone. Eight lines per
+       upload is cheap and says how far it got. */
+    const int total = req->content_len;
+    int remaining = total, next_mark = 128 * 1024;
+    int64_t t0 = esp_timer_get_time();
+
     while (remaining > 0) {
         int r = httpd_req_recv(req, buf, remaining < OTA_CHUNK ? remaining : OTA_CHUNK);
         if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;   /* retry on transient timeout */
         if (r <= 0) {
-            ESP_LOGE(TAG, "OTA: recv error (%d) with %d bytes left", r, remaining);
+            ESP_LOGE(TAG, "OTA: recv error (%d) after %d of %d bytes",
+                     r, total - remaining, total);
             free(buf);
             esp_ota_abort(ota);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive error");
             return ESP_FAIL;
         }
-        if (esp_ota_write(ota, buf, r) != ESP_OK) {
+        esp_err_t werr = esp_ota_write(ota, buf, r);
+        if (werr != ESP_OK) {
+            ESP_LOGE(TAG, "OTA: esp_ota_write failed at %d of %d: %s",
+                     total - remaining, total, esp_err_to_name(werr));
             free(buf);
             esp_ota_abort(ota);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_write failed");
             return ESP_FAIL;
         }
         remaining -= r;
+
+        int done = total - remaining;
+        if (done >= next_mark || remaining == 0) {
+            int secs = (int)((esp_timer_get_time() - t0) / 1000000);
+            ESP_LOGI(TAG, "OTA: %d/%d bytes (%d%%) after %ds",
+                     done, total, total ? (int)((int64_t)done * 100 / total) : 0, secs);
+            next_mark += 128 * 1024;
+        }
     }
     free(buf);
 

@@ -274,12 +274,36 @@ static void simulate_ups_data_task(void *arg)
 #define BUILD_TIMESTAMP __DATE__ " " __TIME__
 #define FIRMWARE_VERSION HMS_ESP_APC_VERSION
 
+/* The ones that actually distinguish a healthy restart from a crash. PANIC,
+   INT_WDT and TASK_WDT mean the firmware died; BROWNOUT means the supply did. */
+static const char *reset_reason_str(esp_reset_reason_t r)
+{
+    switch (r) {
+        case ESP_RST_POWERON:  return "power on";
+        case ESP_RST_SW:       return "software restart (esp_restart)";
+        case ESP_RST_PANIC:    return "PANIC / exception";
+        case ESP_RST_INT_WDT:  return "INTERRUPT WATCHDOG";
+        case ESP_RST_TASK_WDT: return "TASK WATCHDOG";
+        case ESP_RST_WDT:      return "other watchdog";
+        case ESP_RST_BROWNOUT: return "BROWNOUT (supply sagged)";
+        case ESP_RST_DEEPSLEEP:return "deep sleep wake";
+        case ESP_RST_EXT:      return "external reset pin";
+        default:               return "unknown";
+    }
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "═══════════════════════════════════════════");
     ESP_LOGI(TAG, "🚀 APC USB-MQTT Bridge Starting");
     ESP_LOGI(TAG, "   Version: %s", FIRMWARE_VERSION);
     ESP_LOGI(TAG, "   Build: %s", BUILD_TIMESTAMP);
+    /* Why the last boot happened. A board that restarts on its own tells you
+       nothing over the network — the ROM prints its rst: reason to UART only,
+       and the 80-line log ring has overwritten it long before anyone can fetch
+       /status. Chasing the v1.16.0 OTA failures came down to guessing between a
+       watchdog, a panic and a brownout with no way to tell them apart. */
+    ESP_LOGI(TAG, "   Last reset: %s", reset_reason_str(esp_reset_reason()));
     ESP_LOGI(TAG, "═══════════════════════════════════════════");
 
     // BOOT DELAY: Give 10 seconds to flash new firmware before USB host takes over
