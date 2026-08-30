@@ -1,5 +1,62 @@
 # Changelog
 
+## v1.16.1
+
+### OTA is broken and this release does not fix it
+
+Rolling v1.16.0 to the fleet failed on every board. The transfer dies after
+roughly 130-138KB and the board reboots. **The cause is still unknown**, and
+nothing here should be read as a repair — what this release adds is the
+instrumentation needed to find it, because the previous failure left no evidence
+at all.
+
+What is established:
+
+- It is **not** image size. A 256KB image fails the same way as a 1046KB one, so
+  the duration of the up-front erase in `esp_ota_begin()` cannot be responsible
+- It is **not** the `OTA_SIZE_UNKNOWN` bug fixed in v1.14.3. Both boards tested
+  run v1.15.x and carry that fix
+- The "dies around 130KB" signature is **not diagnostic**. That number is the
+  client's own TCP buffering, so every mid-transfer death looks identical from
+  the far end regardless of what killed the board
+- It looks like a regression in v1.15.x: OTA worked at ~1MB on v1.14.x
+
+Failed attempts are harmless. `esp_ota_abort()` recovers cleanly and a board
+keeps running its existing firmware.
+
+- **The boot banner reports why the last reset happened**, naming panics,
+  interrupt and task watchdogs, and brownouts. A board that restarts on its own
+  said nothing over the network — the ROM prints its reason to UART only — so
+  there was no way to tell those causes apart. This is the measurement that
+  should identify the fault
+- **Uploads log progress every 128KB**, with byte count and elapsed time. The
+  log ring is 80 lines and the HID output overwrites it within about ten
+  seconds, so a failed attempt was always gone before `/status` could be fetched
+- `esp_ota_begin()` now uses `OTA_WITH_SEQUENTIAL_WRITES`, erasing each sector
+  immediately before writing it rather than taking the whole erase up front.
+  Defensible on its own merits, but **unproven against this failure**
+
+### Flashing on a Mac without a toolchain
+
+- **New `scripts/flash-mac.command`.** Double-click it in Finder, or run
+  `bash scripts/flash-mac.command`. It installs the Apple command line tools and
+  ESP-IDF, builds the firmware, finds the board on USB, flashes it, and explains
+  how to get it onto WiFi. No Homebrew required — the ESP-IDF installer brings
+  its own compiler, cmake and ninja. Every step is idempotent, so it is safe to
+  run again after a failure
+- Boards are identified by **USB vendor, not device name**. On this hardware the
+  CH343 UART bridge and the chip's own USB port both enumerate as
+  `/dev/cu.usbmodem*`, so the name alone cannot tell them apart, and flashing
+  through the wrong one fails once the firmware claims that port for the UPS
+- **New `sdkconfig.n8r8.defaults`**, a board profile for ESP32-S3-WROOM-1 N8R8
+  DevKitC-1 clones. It differs from the repository default only in the status
+  LED pin: GPIO48 rather than the ESP32-S3-Zero's GPIO21
+- The status LED options in `Kconfig.projbuild` now list the pin for each known
+  board. The comment there previously described a SuperMini and named GPIO48
+  while the default was 21, which was a leftover from a misidentified board.
+  Binding the wrong pin succeeds silently and lights nothing, so this is worth
+  stating precisely
+
 ## v1.16.0
 
 - **The config portal picks the network from a list.** The SSID was a free-text
