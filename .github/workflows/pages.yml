@@ -11,9 +11,22 @@
 # the Pages origin is blocked by the browser.
 #
 # Pages source must be set to "GitHub Actions" once, under Settings > Pages.
+#
+# On triggers: release.yml calls this directly, because a release created with
+# GITHUB_TOKEN does NOT raise a `release` event that can start another workflow.
+# GitHub suppresses that to stop workflows triggering themselves, so relying on
+# `on: release` alone silently deploys nothing for our own releases. That trigger
+# is kept anyway for a release published by hand in the web UI, which does carry
+# a real user and so does fire.
 name: web flasher
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to publish
+        required: true
+        type: string
   release:
     types: [published]
   workflow_dispatch:

@@ -87,3 +87,21 @@ jobs:
           body_path: notes.md
           files: dist/*
           fail_on_unmatched_files: true
+
+  # Republish the web flasher against the release just made. This has to be an
+  # explicit call: the release above is created with GITHUB_TOKEN, and GitHub
+  # does not let a token-created release trigger another workflow, so pages.yml's
+  # own `on: release` never sees it.
+  #
+  # A reusable workflow runs with the calling job's permissions, so the ones
+  # deploy-pages needs are granted here rather than inherited.
+  pages:
+    name: publish web flasher
+    needs: [verify, publish]
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    with:
+      tag: v${{ needs.verify.outputs.version }}
