@@ -1,0 +1,288 @@
+<!doctype html>
+<!--
+  Web flasher for hms-esp-apc.
+
+  This page is not served from the repository. .github/workflows/pages.yml
+  copies it to the Pages site, fills in the __VERSION__ placeholders below, and
+  drops the release's merged images and their manifests into firmware/ next to
+  it. The firmware has to be same-origin: GitHub release assets are served
+  without an Access-Control-Allow-Origin header, so a browser cannot fetch them
+  from here.
+
+  Nothing is installed to use this. esp-web-tools drives esptool over Web
+  Serial, which means Chrome or Edge on a desktop, over HTTPS.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash hms-esp-apc</title>
+<meta name="description" content="Flash the hms-esp-apc UPS bridge firmware onto an ESP32-S3 from your browser.">
+<!-- Inline so the page stays a single file and never 404s for a favicon. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%236ea8fe'/%3E%3Cpath d='M8.6 2.5 4.2 9.1h3l-.8 4.4 4.4-6.6h-3z' fill='%230b1220'/%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #12141c;
+    --panel: #1a1d27;
+    --panel-hi: #222634;
+    --line: #2e3342;
+    --text: #e6e8ee;
+    --muted: #9aa1b1;
+    --accent: #6ea8fe;
+    --accent-ink: #0b1220;
+    --warn: #f0b849;
+    --ok: #5fd08a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2.5rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .35rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.05rem; margin: 2.25rem 0 .75rem; letter-spacing: -.01em; }
+  p { margin: 0 0 1rem; }
+  .sub { color: var(--muted); margin-bottom: 2rem; }
+  .sub code { color: var(--text); }
+  code, kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .875em;
+  }
+  kbd {
+    background: var(--panel-hi); border: 1px solid var(--line);
+    border-radius: 4px; padding: .1em .4em;
+  }
+  a { color: var(--accent); }
+
+  /* Board picker */
+  .boards { display: grid; gap: .75rem; margin: 0 0 1.5rem; }
+  @media (min-width: 34rem) { .boards { grid-template-columns: 1fr 1fr; } }
+  .board {
+    display: block; cursor: pointer; padding: 1rem 1.1rem;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; transition: border-color .12s, background .12s;
+  }
+  .board:hover { background: var(--panel-hi); }
+  .board input { position: absolute; opacity: 0; pointer-events: none; }
+  .board:has(input:checked) { border-color: var(--accent); background: var(--panel-hi); }
+  .board:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .board .name { font-weight: 600; display: block; }
+  .board .detail { color: var(--muted); font-size: .875rem; display: block; margin-top: .15rem; }
+
+  /* Flash panel */
+  .flash {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1.5rem; text-align: center;
+  }
+  esp-web-install-button { --esp-tools-button-color: var(--accent); }
+  button.primary {
+    font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink);
+    border: 0; border-radius: 8px; padding: .7rem 1.6rem;
+  }
+  button.primary:hover { filter: brightness(1.08); }
+  .unsupported {
+    color: var(--warn); margin: 0; text-align: left;
+  }
+  .flash-note { color: var(--muted); font-size: .875rem; margin: .9rem 0 0; }
+
+  /* Content blocks */
+  ol, ul { margin: 0 0 1rem; padding-left: 1.25rem; }
+  li { margin-bottom: .4rem; }
+  .callout {
+    background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--warn);
+    border-radius: 0 8px 8px 0; padding: .9rem 1.1rem; margin: 0 0 1rem;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  details {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: .75rem 1.1rem; margin-bottom: .6rem;
+  }
+  details[open] { padding-bottom: .25rem; }
+  summary { cursor: pointer; font-weight: 600; }
+  footer {
+    margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: .875rem;
+  }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Flash hms-esp-apc</h1>
+  <p class="sub">
+    Puts firmware <strong>v__VERSION__</strong> onto an ESP32-S3 straight from this
+    page. Nothing to install and nothing to build &mdash; plug the board in, pick it
+    below, and click the button.
+  </p>
+
+  <h2>1. Which board is it?</h2>
+  <p>
+    The two builds differ in one thing: which pin the status LED is on. Pick the
+    wrong one and the board still works perfectly, its LED just stays dark.
+  </p>
+
+  <div class="boards">
+    <label class="board">
+      <input type="radio" name="board" value="n8r8" checked>
+      <span class="name">ESP32-S3-DevKitC-1</span>
+      <span class="detail">N8R8 module, two USB-C ports. LED on GPIO48.</span>
+    </label>
+    <label class="board">
+      <input type="radio" name="board" value="default">
+      <span class="name">ESP32-S3-Zero</span>
+      <span class="detail">Small single-port board. LED on GPIO21.</span>
+    </label>
+  </div>
+
+  <h2>2. Plug it in and flash</h2>
+
+  <div class="callout">
+    <p>
+      <strong>The DevKitC-1 has two USB-C ports. Use the one labelled UART or
+      COM.</strong> That port is a separate chip, so it keeps working no matter
+      what the firmware does. The other port belongs to the ESP32-S3 itself, and
+      this firmware takes it over for the UPS a few seconds after boot.
+    </p>
+  </div>
+
+  <div class="flash">
+    <esp-web-install-button id="installer" manifest="firmware/manifest-n8r8.json">
+      <button class="primary" slot="activate">Connect and flash</button>
+      <p class="unsupported" slot="unsupported">
+        This browser cannot talk to serial devices. Open this page in
+        <strong>Chrome</strong> or <strong>Edge</strong> on a desktop or laptop
+        &mdash; Safari, Firefox and every mobile browser lack the Web Serial API.
+      </p>
+      <p class="unsupported" slot="not-allowed">
+        This page has to be served over HTTPS to reach a serial port.
+      </p>
+    </esp-web-install-button>
+    <p class="flash-note">
+      Your browser will ask which serial port to use. Pick the one that appears
+      when you plug the board in. Flashing takes about a minute; leave the cable
+      alone until it says it is done.
+    </p>
+  </div>
+
+  <p>
+    Choose <strong>Erase device</strong> if the board is new or has run other
+    firmware. Leave it unticked to keep an existing board's saved WiFi and MQTT
+    settings, which live in a separate flash area and survive a reflash.
+  </p>
+
+  <h2>3. Get it onto WiFi</h2>
+  <p>
+    The board waits 10 seconds after flashing, then creates its own open WiFi
+    network named <code>APC-XXXX</code>, where the last four characters come from
+    its hardware address.
+  </p>
+  <ol>
+    <li>On a phone or laptop, join the <code>APC-XXXX</code> network. There is no password.</li>
+    <li>A setup page should open on its own. If it does not, visit <code>http://192.168.4.1/</code></li>
+    <li>Pick your WiFi network, enter its password and your MQTT broker address, then save.</li>
+  </ol>
+  <p>
+    The board restarts, joins your network, and shows up in Home Assistant by
+    itself. Its own page then shows the live UPS readings.
+  </p>
+
+  <h2>4. Connect the UPS</h2>
+  <p>
+    Run a USB cable from the UPS to the board's <strong>other</strong> USB-C port
+    &mdash; the one you did not flash through. On a single-port board, flash first,
+    then move the cable to the UPS and power the board from elsewhere.
+  </p>
+
+  <h2>If something goes wrong</h2>
+
+  <details>
+    <summary>No port appears when I plug the board in</summary>
+    <p>
+      Usually the cable. Plenty of USB-C cables carry power only, and a board
+      that lights up can still have no data connection. Try a different cable
+      first, then the other USB-C port.
+    </p>
+  </details>
+
+  <details>
+    <summary>The port shows up, then vanishes a few seconds later</summary>
+    <p>
+      That is the firmware doing its job. On the ESP32-S3 the USB-Serial/JTAG
+      peripheral shares pins with USB host, so when the firmware starts the host
+      stack the serial port disappears. The 10 second boot delay exists to give
+      you a window to start a reflash.
+    </p>
+    <p>
+      To get a port that stays up indefinitely, hold <kbd>BOOT</kbd>, tap
+      <kbd>RESET</kbd>, then release <kbd>BOOT</kbd>. That enters download mode.
+      Flash from this page as normal.
+    </p>
+  </details>
+
+  <details>
+    <summary>Flashing fails partway through</summary>
+    <p>
+      Close anything else holding the port &mdash; Arduino IDE, a serial monitor, a
+      previous tab of this page &mdash; and try again. A failed flash cannot brick the
+      board; the ROM bootloader is in silicon and <kbd>BOOT</kbd> + <kbd>RESET</kbd>
+      always gets you back to download mode.
+    </p>
+  </details>
+
+  <details>
+    <summary>It flashed, but the LED never lights up</summary>
+    <p>
+      Almost certainly the wrong board profile. Go back to step 1, pick the
+      other one, and flash again. Nothing else differs between the two images,
+      so the board was working the whole time.
+    </p>
+  </details>
+
+  <details>
+    <summary>I would rather build it myself</summary>
+    <p>
+      Everything this page does is in the repository. See
+      <a href="https://github.com/hms-homelab/hms-esp-apc#build-and-flash">Build
+      and flash</a> for the ESP-IDF route, or run
+      <code>scripts/flash-mac.command</code> on a Mac to build and flash in one
+      step.
+    </p>
+  </details>
+
+  <footer>
+    <p>
+      hms-esp-apc v__VERSION__ &middot;
+      <a href="https://github.com/hms-homelab/hms-esp-apc">source</a> &middot;
+      <a href="https://github.com/hms-homelab/hms-esp-apc/releases/tag/v__VERSION__">release notes</a>
+      &middot; MIT
+    </p>
+    <p>
+      Flashing runs entirely in your browser, using
+      <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a>. No
+      firmware, serial data or credentials reach any server.
+    </p>
+  </footer>
+
+</main>
+
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<script>
+  // The install button reads its manifest attribute when it is clicked, so
+  // swapping the attribute in place is enough — no need to rebuild the element.
+  const installer = document.getElementById('installer');
+  for (const radio of document.querySelectorAll('input[name="board"]')) {
+    radio.addEventListener('change', () => {
+      installer.manifest = `firmware/manifest-${radio.value}.json`;
+      installer.setAttribute('manifest', `firmware/manifest-${radio.value}.json`);
+    });
+  }
+</script>
+</body>
+</html>

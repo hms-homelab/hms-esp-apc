@@ -10,6 +10,9 @@ sdkconfig.old
 # clangd index
 .cache/
 
+# left behind by running the scripts in .github/scripts/
+__pycache__/
+
 # local bench credentials — never commit
 sdkconfig.local.defaults
 

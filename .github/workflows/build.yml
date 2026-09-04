@@ -44,6 +44,15 @@ jobs:
       # esp_idf_version tracks the idf entry in dependencies.lock. The component
       # manager fetches espressif/led_strip during the build; managed_components/
       # is gitignored on purpose.
+      # Two board profiles, because the status LED sits on a different pin on
+      # each and the driver binds silently either way — a wrong pin is a dark
+      # LED, not an error. Everything else about the two images is identical.
+      #
+      #   build/       sdkconfig.defaults alone      ESP32-S3-Zero, WS2812 GPIO21
+      #   build-n8r8/  + sdkconfig.n8r8.defaults     DevKitC-1 N8R8, WS2812 GPIO48
+      #
+      # Each build gets its own -DSDKCONFIG so the second one cannot inherit the
+      # first one's resolved configuration.
       - name: Build
         uses: espressif/esp-idf-ci-action@v1
         with:
@@ -51,28 +60,61 @@ jobs:
           target: esp32s3
           path: '.'
           # merge-bin resolves -o relative to the build directory, which is
-          # already its working directory, so this lands at build/merged.bin.
-          command: idf.py build && idf.py merge-bin -o merged.bin
+          # already its working directory, so these land at <build dir>/merged.bin.
+          #
+          # Keep each idf.py call on one line. In a YAML folded scalar a
+          # more-indented continuation line keeps its newline, which would split
+          # one command into several and fail with "-DSDKCONFIG: not found".
+          command: >-
+            idf.py -B build -DSDKCONFIG=build/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults" build
+            && idf.py -B build merge-bin -o merged.bin
+            && idf.py -B build-n8r8 -DSDKCONFIG=build-n8r8/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.n8r8.defaults" build
+            && idf.py -B build-n8r8 merge-bin -o merged.bin
 
-      - name: Assert the build picked up version.h
+      - name: Assert the builds picked up version.h
         run: |
-          built=$(python3 -c "import json;print(json.load(open('build/project_description.json'))['project_version'])")
           want='${{ steps.version.outputs.version }}'
-          if [ "$built" != "$want" ]; then
-            echo "::error::app descriptor says '$built' but main/version.h says '$want'"
-            exit 1
-          fi
-          echo "app descriptor version: $built"
+          for dir in build build-n8r8; do
+            built=$(python3 -c "import json;print(json.load(open('$dir/project_description.json'))['project_version'])")
+            if [ "$built" != "$want" ]; then
+              echo "::error::$dir app descriptor says '$built' but main/version.h says '$want'"
+              exit 1
+            fi
+            echo "$dir app descriptor version: $built"
+          done
 
-      # Two shapes: the app image for an OTA update from the web UI, and a full
-      # flash image for a blank board or any board still on a pre-OTA build
-      # (v1.11.0 and earlier have no ota_0/ota_1, so their first hop must be USB).
+      # A wrong LED pin produces a working board with a dark LED, which nobody
+      # notices until it is in someone else's hands. Read the pin back out of
+      # each resolved sdkconfig rather than trusting that the defaults layered.
+      - name: Assert each profile got its own status LED pin
+        run: |
+          check() {
+            got=$(sed -n 's/^CONFIG_STATUS_LED_GPIO=\([0-9]*\).*/\1/p' "$1/sdkconfig")
+            if [ "$got" != "$2" ]; then
+              echo "::error::$1 has CONFIG_STATUS_LED_GPIO='$got', expected $2"
+              exit 1
+            fi
+            echo "$1 status LED: GPIO$got"
+          }
+          check build      21
+          check build-n8r8 48
+
+      # Two shapes per board profile: the app image for an OTA update from the
+      # web UI, and a full flash image for a blank board or any board still on a
+      # pre-OTA build (v1.11.0 and earlier have no ota_0/ota_1, so their first
+      # hop must be USB). The merged images are also what the web flasher at
+      # .github/workflows/pages.yml serves.
+      #
+      # The unsuffixed names stay exactly as they were, so an OTA link or a
+      # script pointing at hms-esp-apc-<v>.bin keeps working.
       - name: Stage artifacts
         run: |
           v='${{ steps.version.outputs.version }}'
           mkdir -p dist
-          cp build/apc_usb_mqtt_bridge.bin "dist/hms-esp-apc-$v.bin"
-          cp build/merged.bin              "dist/hms-esp-apc-$v-merged.bin"
+          cp build/apc_usb_mqtt_bridge.bin      "dist/hms-esp-apc-$v.bin"
+          cp build/merged.bin                   "dist/hms-esp-apc-$v-merged.bin"
+          cp build-n8r8/apc_usb_mqtt_bridge.bin "dist/hms-esp-apc-$v-n8r8.bin"
+          cp build-n8r8/merged.bin              "dist/hms-esp-apc-$v-n8r8-merged.bin"
           ls -l dist
 
       - uses: actions/upload-artifact@v6

@@ -1,0 +1,99 @@
+# Publishes the browser-based flasher at
+#   https://hms-homelab.github.io/hms-esp-apc/
+#
+# Runs after a release is published, so the page always offers whatever the
+# newest release contains. It never builds firmware: it takes the merged images
+# straight from the release assets, which is the same file anyone would download
+# and flash by hand.
+#
+# The images have to be copied onto the site rather than linked. GitHub serves
+# release assets without an Access-Control-Allow-Origin header, so a fetch() from
+# the Pages origin is blocked by the browser.
+#
+# Pages source must be set to "GitHub Actions" once, under Settings > Pages.
+name: web flasher
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (defaults to the latest release)
+        required: false
+        type: string
+
+# Only one deployment at a time, and never cancel one halfway: an interrupted
+# deploy can leave the site serving a manifest whose firmware is not there yet.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: publish flasher
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Work out which release to publish
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          tag="${INPUT_TAG:-$EVENT_TAG}"
+          if [ -z "$tag" ]; then
+            tag=$(gh release view --json tagName --jq .tagName)
+          fi
+          echo "tag=$tag"          >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}"  >> "$GITHUB_OUTPUT"
+          echo "Publishing the flasher for $tag"
+
+      - name: Fetch the release firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          mkdir -p site/firmware
+          gh release download "$TAG" \
+             --pattern "hms-esp-apc-$VERSION-merged.bin" \
+             --pattern "hms-esp-apc-$VERSION-n8r8-merged.bin" \
+             --dir site/firmware
+
+      - name: Assemble the site
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          # The page is checked in with __VERSION__ placeholders so it can be
+          # opened and edited without a build step.
+          sed "s/__VERSION__/$VERSION/g" docs/flasher/index.html > site/index.html
+          if grep -q '__VERSION__' site/index.html; then
+            echo "::error::a __VERSION__ placeholder survived substitution"
+            exit 1
+          fi
+          # Jekyll would otherwise try to process the site and can drop files.
+          touch site/.nojekyll
+          python3 .github/scripts/build_flasher_manifests.py site/firmware "$VERSION"
+          find site -type f | sort
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -140,8 +140,29 @@ idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.local.defaults" build
 
 ## Build and flash
 
+### From a browser, with nothing installed
+
+**[hms-homelab.github.io/hms-esp-apc](https://hms-homelab.github.io/hms-esp-apc/)**
+
+Plug the board into any computer, open that page in Chrome or Edge, pick your
+board and click the button. Nothing to install, no toolchain, no clone. It
+flashes the newest release over Web Serial, entirely in the browser — no
+firmware or credentials touch a server.
+
+This is the easiest route by a wide margin, and the one to send someone else.
+Both board profiles are offered, prebuilt:
+
+| Board | Status LED | Image |
+|---|---|---|
+| ESP32-S3-DevKitC-1 (N8R8) | GPIO48 | `hms-esp-apc-<version>-n8r8-merged.bin` |
+| ESP32-S3-Zero | GPIO21 | `hms-esp-apc-<version>-merged.bin` |
+
+Picking the wrong one leaves the LED dark and changes nothing else, so it is
+worth a second look but not worth worrying about.
+
 ### On a Mac, with nothing installed
 
+Use this if you want to flash a modified tree rather than a release.
 Double-click `scripts/flash-mac.command`, or run it from a terminal:
 
 ```bash

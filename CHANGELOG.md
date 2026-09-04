@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Flash from a browser
+
+There is now a web flasher at
+[hms-homelab.github.io/hms-esp-apc](https://hms-homelab.github.io/hms-esp-apc/).
+Plug a board in, open the page in Chrome or Edge, pick the board and click a
+button. No clone, no ESP-IDF, no 2GB download. It uses Web Serial through
+[ESP Web Tools](https://esphome.github.io/esp-web-tools/), so the firmware never
+leaves the browser.
+
+`scripts/flash-mac.command` still exists and is still the way to flash a
+modified tree; it is no longer the way to hand a board to somebody else.
+
+Supporting changes:
+
+- CI now builds **both board profiles** on every release. The N8R8 DevKitC-1
+  profile was previously only reachable by building it yourself, which meant no
+  prebuilt image existed for that board. Releases gain
+  `hms-esp-apc-<version>-n8r8.bin` and `hms-esp-apc-<version>-n8r8-merged.bin`;
+  the existing asset names are unchanged
+- The build asserts each profile's resolved `CONFIG_STATUS_LED_GPIO` (21 for the
+  default, 48 for N8R8). A wrong LED pin binds without error and simply lights
+  nothing, so it cannot be caught by the build succeeding
+- The Pages deploy copies release images onto the site rather than linking them.
+  GitHub serves release assets without an `Access-Control-Allow-Origin` header,
+  so a browser cannot fetch them cross-origin
+
+No firmware change. The images this release's page serves are byte-identical to
+what the same tag produced before, apart from the LED pin in the N8R8 variant.
+
 ## v1.16.1
 
 ### OTA is broken and this release does not fix it
