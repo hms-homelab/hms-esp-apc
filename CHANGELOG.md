@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.16.2
 
 ### Flash from a browser
 
