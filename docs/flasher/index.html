@@ -145,10 +145,20 @@
 
   <div class="callout">
     <p>
-      <strong>The DevKitC-1 has two USB-C ports. Use the one labelled UART or
-      COM.</strong> That port is a separate chip, so it keeps working no matter
-      what the firmware does. The other port belongs to the ESP32-S3 itself, and
-      this firmware takes it over for the UPS a few seconds after boot.
+      <strong>The DevKitC-1 has two USB-C ports. Flash through the one labelled
+      USB.</strong> That one goes through a separate bridge chip, so it keeps
+      working no matter what the firmware does. The other port is wired to the
+      ESP32-S3 itself, and this firmware claims it for the UPS a few seconds
+      after boot &mdash; flashing through that one fails once the board has
+      booted.
+    </p>
+    <p>
+      If the board does not appear, or flashing fails to start, <strong>try the
+      other port</strong>. Some clones of this board have the two labels printed
+      the wrong way round. The browser's port list is the real answer: the
+      bridge shows up as <strong>WCH</strong> or <strong>Silicon Labs</strong>
+      and is the one you want, while <strong>Espressif</strong> is the port that
+      becomes the UPS connection.
     </p>
   </div>
 

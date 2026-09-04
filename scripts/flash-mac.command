@@ -135,10 +135,12 @@ ok "built v$VERSION ($(( $(stat -f%z "$APP_BIN") / 1024 )) KB)"
 
 # ── 4. Find the board ─────────────────────────────────────────────────────
 # Two boards can present the same /dev/cu.usbmodem* name, so the USB vendor is
-# what actually identifies them. A CH343 or CP210x is the board's UART port,
-# which is the one to flash: it is a separate chip, so it keeps working no
-# matter what the firmware does. An Espressif vendor id is the chip's own USB
-# port, which the firmware takes over for the UPS once it boots.
+# what actually identifies them, and it is also the only thing that beats the
+# silkscreen: some clones of this board print the two port labels the wrong way
+# round. A CH343 or CP210x is the bridge chip, which is the one to flash
+# through — a separate chip, so it keeps working no matter what the firmware
+# does. An Espressif vendor id is the ESP32-S3's own port, which the firmware
+# takes over for the UPS once it boots.
 
 USB_TSV="$(mktemp)"
 trap 'rm -f "$USB_TSV"' EXIT
@@ -174,7 +176,9 @@ if [ ${#PORTS[@]} -eq 0 ]; then
 "Plug the board into this Mac with a USB-C cable, then run this again.
 
 Two things catch people out:
-  • The board has TWO USB-C ports. Use the one labelled UART or COM.
+  • The board has TWO USB-C ports. Use the one labelled USB — it is the one
+    behind the bridge chip. If that does not appear, try the other port; some
+    clones have the labels printed the wrong way round.
   • Some USB-C cables only carry power. If nothing appears, try another cable."
 fi
 
@@ -229,7 +233,7 @@ idf.py -B "$BUILD_DIR" \
 "Full output: /tmp/hms-esp-apc-flash.log
 
 Most common causes:
-  • The cable is in the board's other USB-C port. Use the UART/COM one.
+  • The cable is in the board's other USB-C port. Use the one labelled USB.
   • Something else is holding the port. Close it and try again.
   • The cable carries power but not data. Try another cable."
 ok "flashed"

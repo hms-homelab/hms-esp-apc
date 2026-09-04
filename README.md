@@ -174,9 +174,17 @@ USB and flashes it, then tells you how to get it onto WiFi. The first run
 downloads about 2GB and takes 15-30 minutes; after that it takes a minute. It is
 safe to run again — every step checks whether it already did its work.
 
-The board has two USB-C ports. **Flash through the one labelled UART or COM**;
-the other is wired to the chip itself and the firmware claims it for the UPS.
-Plug the UPS into that one afterwards.
+The board has two USB-C ports. **Flash through the one labelled USB**; it goes
+through a separate bridge chip and works whatever the firmware is doing. The
+other port is wired to the ESP32-S3 itself and the firmware claims it for the
+UPS, so plug the UPS into that one afterwards.
+
+If nothing appears, try the other port — some clones have the two labels printed
+the wrong way round. Identify them by USB vendor rather than by the silkscreen:
+`0x1A86` (WCH) or `0x10C4` (SiLabs) is the bridge and is the one to flash
+through, `0x303A` (Espressif) is the native port that becomes the UPS
+connection. Both enumerate under similar device names, so the name alone does
+not tell them apart.
 
 This script targets the ESP32-S3 **N8R8** board profile
 (`sdkconfig.n8r8.defaults`), which differs from the repository default only in
