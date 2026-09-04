@@ -118,7 +118,7 @@
   <h1>Flash hms-esp-apc</h1>
   <p class="sub">
     Puts firmware <strong>v__VERSION__</strong> onto an ESP32-S3 straight from this
-    page. Nothing to install and nothing to build &mdash; plug the board in, pick it
+    page. Nothing to install and nothing to build. Plug the board in, pick it
     below, and click the button.
   </p>
 
@@ -149,7 +149,7 @@
       USB.</strong> That one goes through a separate bridge chip, so it keeps
       working no matter what the firmware does. The other port is wired to the
       ESP32-S3 itself, and this firmware claims it for the UPS a few seconds
-      after boot &mdash; flashing through that one fails once the board has
+      after boot, so flashing through that one fails once the board has
       booted.
     </p>
     <p>
@@ -167,8 +167,8 @@
       <button class="primary" slot="activate">Connect and flash</button>
       <p class="unsupported" slot="unsupported">
         This browser cannot talk to serial devices. Open this page in
-        <strong>Chrome</strong> or <strong>Edge</strong> on a desktop or laptop
-        &mdash; Safari, Firefox and every mobile browser lack the Web Serial API.
+        <strong>Chrome</strong> or <strong>Edge</strong> on a desktop or laptop.
+        Safari, Firefox and every mobile browser lack the Web Serial API.
       </p>
       <p class="unsupported" slot="not-allowed">
         This page has to be served over HTTPS to reach a serial port.
@@ -205,8 +205,8 @@
 
   <h2>4. Connect the UPS</h2>
   <p>
-    Run a USB cable from the UPS to the board's <strong>other</strong> USB-C port
-    &mdash; the one you did not flash through. On a single-port board, flash first,
+    Run a USB cable from the UPS to the board's <strong>other</strong> USB-C port,
+    the one you did not flash through. On a single-port board, flash first,
     then move the cable to the UPS and power the board from elsewhere.
   </p>
 
@@ -239,8 +239,8 @@
   <details>
     <summary>Flashing fails partway through</summary>
     <p>
-      Close anything else holding the port &mdash; Arduino IDE, a serial monitor, a
-      previous tab of this page &mdash; and try again. A failed flash cannot brick the
+      Close anything else holding the port (Arduino IDE, a serial monitor, a
+      previous tab of this page) and try again. A failed flash cannot brick the
       board; the ROM bootloader is in silicon and <kbd>BOOT</kbd> + <kbd>RESET</kbd>
       always gets you back to download mode.
     </p>
@@ -285,7 +285,7 @@
 <script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
 <script>
   // The install button reads its manifest attribute when it is clicked, so
-  // swapping the attribute in place is enough — no need to rebuild the element.
+  // swapping the attribute in place is enough, with no need to rebuild the element.
   const installer = document.getElementById('installer');
   for (const radio of document.querySelectorAll('input[name="board"]')) {
     radio.addEventListener('change', () => {
