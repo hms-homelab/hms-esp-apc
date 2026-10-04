@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.16.3
+
+### A board no longer drops off the network for good after a WiFi outage
+
+When WiFi went away, a board retried ten times back to back and then gave up,
+and nothing ever tried again. A router reboot outlasts ten quick retries, so
+every board stayed offline (no MQTT, no web page, Home Assistant showing
+`unknown`) until someone unplugged it and plugged it back in.
+
+Now, once a board has joined the network, a lost connection is retried forever,
+1 s after the drop and then doubling up to once a minute, and MQTT reconnects on
+its own once WiFi is back. Nothing else changes: at boot, a board that cannot
+join its saved network still falls back to the setup portal after the usual
+retries, which is how a wrong WiFi password gets fixed without a cable.
+
 ## v1.16.2
 
 ### Flash from a browser

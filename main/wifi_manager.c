@@ -5,6 +5,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_mac.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -28,6 +29,25 @@ static int   s_retry_num        = 0;
 static bool  s_portal_active    = false;
 static bool  s_initialized      = false;
 
+/* Once the board has joined the network, a lost connection is never given up
+ * on. The boot-time retry limit exists to fall back to the portal when the
+ * saved network is wrong; applied to an outage after a working connection it
+ * left the board off the network for good: a router reboot outlasted the ten
+ * back-to-back retries and every board stayed dark until power-cycled. So after
+ * the first IP, reconnects run forever, spaced out by a timer (never from the
+ * event handler itself), 1 s doubling to a 60 s ceiling. */
+#define WIFI_BACKOFF_MIN_MS  1000
+#define WIFI_BACKOFF_MAX_MS 60000
+static bool               s_ever_connected = false;
+static uint32_t           s_backoff_ms     = 0;
+static esp_timer_handle_t s_retry_timer    = NULL;
+
+static void retry_timer_cb(void *arg)
+{
+    (void) arg;
+    if (!s_portal_active) esp_wifi_connect();
+}
+
 /* Defined below, next to the scan cache it fills. Called by wifi_start_portal()
  * while still in STA-only mode, before the AP is brought up. */
 static void do_scan_and_cache(void);
@@ -44,6 +64,15 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         /* Once the portal is up we stop hammering the STA interface. */
         if (s_portal_active) return;
 
+        if (s_ever_connected) {
+            s_backoff_ms = s_backoff_ms ? s_backoff_ms * 2 : WIFI_BACKOFF_MIN_MS;
+            if (s_backoff_ms > WIFI_BACKOFF_MAX_MS) s_backoff_ms = WIFI_BACKOFF_MAX_MS;
+            ESP_LOGW(TAG, "WiFi lost, reconnecting in %lu s", (unsigned long) (s_backoff_ms / 1000));
+            esp_timer_stop(s_retry_timer);   /* not running is fine */
+            esp_timer_start_once(s_retry_timer, (uint64_t) s_backoff_ms * 1000ULL);
+            return;
+        }
+
         if (s_retry_num < WIFI_MAX_RETRY) {
             s_retry_num++;
             ESP_LOGW(TAG, "WiFi disconnected, retry %d/%d...", s_retry_num, WIFI_MAX_RETRY);
@@ -56,7 +85,9 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "✅ Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
-        s_retry_num = 0;
+        s_retry_num      = 0;
+        s_backoff_ms     = 0;
+        s_ever_connected = true;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
 
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_STACONNECTED) {
@@ -87,6 +118,12 @@ esp_err_t wifi_manager_init(void)
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    const esp_timer_create_args_t retry_args = {
+        .callback = &retry_timer_cb,
+        .name     = "wifi_retry",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&retry_args, &s_retry_timer));
 
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;

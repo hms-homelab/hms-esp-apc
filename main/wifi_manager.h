@@ -16,8 +16,10 @@
  * wifi_connect_sta() or wifi_start_portal(). */
 esp_err_t wifi_manager_init(void);
 
-/* Join an existing network. Retries WIFI_MAX_RETRY times, then reports failure
- * through wifi_wait_connected(). */
+/* Join an existing network. Until the first successful join, retries
+ * WIFI_MAX_RETRY times and then reports failure through wifi_wait_connected(),
+ * so boot can fall back to the portal. After the first join, a lost connection
+ * is retried forever with a 1 s to 60 s backoff. */
 esp_err_t wifi_connect_sta(const char *ssid, const char *password);
 
 /* Blocks until associated + DHCP, or until the retry budget is spent. */
